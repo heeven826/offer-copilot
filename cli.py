@@ -348,7 +348,8 @@ def cmd_jobs(args):
         sig_tags = direction_signal(" ".join(filter(None, [
             " ".join(raw.get("skills") or []),
             " ".join(raw.get("jobLabels") or [])])))
-        dmatch = direction_match(sig_title, roles)
+        dmatch = direction_match(sig_title, roles) if roles else None
+        # roles 为空时输出 null（无法判断）而非 []（无交集）——四态语义，R11-2
         data.append({
             "job_id": raw.get("encryptJobId", ""),
             "title": raw.get("jobName", ""),
