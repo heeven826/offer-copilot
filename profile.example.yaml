@@ -1,0 +1,27 @@
+# ============ 求职画像模板 ============
+# 复制本文件为 profile.yaml 并填写你的真实信息（profile.yaml 不会入库）
+# AI 匹配打分和打招呼话术都依赖这份画像，填写越实，筛选越准
+
+basics:
+  name: ""                     # 你的姓名（话术第一句会自报家门）
+  years_of_experience: 0       # 工作总年限
+  education: ""                # 最高学历，如"XX大学 计算机硕士"
+  english: ""                  # 英语水平（可选）
+  current_role: ""             # 当前职位与单位
+  city: ""                     # 期望城市
+
+target_roles: []               # 目标职位方向，如 ["AI技术总监", "大模型应用"]
+salary_expectation: ""         # 期望薪资，如"40-60K，可谈"
+
+skills: {}                     # 技能分类，如：
+                               # skills:
+                               #   大模型应用: [LangChain, RAG, Agent]
+                               #   工程: [Python, 服务部署]
+
+highlights: []                 # 量化亮点（AI 话术优先引用，数字要精确），如：
+                               # - "主导XX系统落地，服务500+用户，准确率97%"
+                               # - "管理20人研发团队，从0到1交付X产品"
+
+expectations: ""               # 其他期望：方向偏好/加班接受度/出差等
+
+tone: "真诚、专业、有分量"      # 打招呼话术的语气风格

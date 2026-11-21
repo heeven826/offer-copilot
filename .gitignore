@@ -1,0 +1,16 @@
+# ===== 个人数据（绝不入库）=====
+resume/
+profile.yaml
+.env
+data/
+logs/
+samples/
+chrome_profile/
+exports/
+
+# ===== 环境 =====
+.venv/
+__pycache__/
+*.pyc
+.claude/
+*.db
