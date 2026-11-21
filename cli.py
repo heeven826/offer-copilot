@@ -173,6 +173,21 @@ def target_roles_of(profile: dict) -> list:
 
 # ---------------- 子命令 ----------------
 
+def cmd_health(args):
+    """REQ-10 账号健康：今日操作一屏回看 + 预警线 + 质量退化哨兵。
+
+    status=healthy 退出码0；status=warning 退出码1（ok:false + data 附带详情）。
+    """
+    import health as health_mod
+    cfg = load_cfg()
+    db = open_db(args)
+    s = health_mod.summarize(db, cfg)
+    if s["status"] == "warning":
+        codes = ", ".join(w["code"] for w in s["warnings"])
+        out(data=s, error=f"health_warning: {codes}（详情见 data.warnings）", code=1)
+    out(s)
+
+
 def cmd_doctor(args):
     """环境自检：登录/期望标签/关键选择器逐项体检，输出结构化结果。
 
@@ -605,6 +620,7 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("doctor", help="环境自检：登录/期望标签/关键选择器逐项体检")
+    sub.add_parser("health", help="账号健康：今日操作回看+预警线+质量哨兵（REQ-10）")
     sub.add_parser("status", help="登录态/期望职位/配额/配置/目标一致性")
     sub.add_parser("jobs", help="当前期望页职位列表（含硬过滤与去重标注）")
     d = sub.add_parser("detail", help="打开职位详情抓JD（含30-40s节奏）")
@@ -662,7 +678,7 @@ def main():
     if _OUT_FILE:
         _OUT_FILE = str(Path(_OUT_FILE).absolute())
 
-    {"doctor": cmd_doctor, "status": cmd_status, "jobs": cmd_jobs,
+    {"doctor": cmd_doctor, "health": cmd_health, "status": cmd_status, "jobs": cmd_jobs,
      "detail": cmd_detail, "greet": cmd_greet, "inbox": cmd_inbox,
      "reply": cmd_reply, "resume": cmd_resume, "archive": cmd_archive,
      "setup": cmd_setup, "star": cmd_star, "run": cmd_run}[args.cmd](args)

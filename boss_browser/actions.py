@@ -17,7 +17,7 @@ from loguru import logger
 
 from .expect_page import SELECTORS as EXPECT_SELECTORS
 from .human import sleep_range
-from .risk import check_risk
+from .risk import RiskControlError, check_risk
 
 # 2026-11-21 实测有效
 GREET_READY = True
@@ -58,6 +58,14 @@ class Communicator:
                 self.db.set_state(key, str(time.time()))
             except Exception:
                 pass
+
+    def _audit(self, action: str, target: str = "", outcome: str = "ok", **detail):
+        """操作审计（REQ-10）。db 缺失时静默跳过（测试环境）。"""
+        try:
+            if self.db:
+                self.db.audit(action, target, outcome, **detail)
+        except Exception:
+            pass
 
     def _pace_details(self):
         """两次查看职位详情之间保持 30-40s（随机）节奏 —— 跨进程持久化。"""
@@ -157,6 +165,8 @@ class Communicator:
         jd = self.read_job_desc()
         if jd:
             logger.debug(f"已抓取职位描述 {len(jd)} 字")
+        self._audit("detail", target=eid, outcome="ok" if jd else "warn",
+                    jd_len=len(jd), via="card" if link else "url")
         return jd
 
     def greet(self, greeting_text: str, job=None, detail_open: bool = False) -> dict:
@@ -175,9 +185,15 @@ class Communicator:
         """
         result = {"ok": False, "stage": "", "verified": False, "note": ""}
 
+        _start_ts = time.time()
+        _truncated = False
+
         def fail(stage, note=""):
             result.update(stage=stage, note=note)
             logger.warning(f"打招呼失败[{stage}]: {note}")
+            self._audit("greet", target=getattr(job, "job_id", "") or "",
+                        outcome="fail", stage=stage, msg_len=len(greeting_text),
+                        truncated=_truncated, duration=round(time.time() - _start_ts, 1))
             try:
                 self._back()
             except Exception:
@@ -187,6 +203,7 @@ class Communicator:
         try:
             # 输入框 maxlength=300，超长先截断到句子边界
             if len(greeting_text) > 290:
+                _truncated = True
                 cut = max(greeting_text.rfind(". ", 0, 290),
                           greeting_text.rfind("。", 0, 290),
                           greeting_text.rfind("！", 0, 290))
@@ -243,12 +260,20 @@ class Communicator:
             # 发送后验证：读会话最后一条我方消息比对
             verified = self._verify_sent(greeting_text)
             self._set_ts("last_greet_ts")     # 跨进程消息节奏锚点
+            self._audit("greet", target=getattr(job, "job_id", "") or "",
+                        outcome="ok", stage="done" if verified else "done_unverified",
+                        verified=verified, msg_len=len(greeting_text),
+                        truncated=_truncated, duration=round(time.time() - _start_ts, 1))
             result.update(ok=True, verified=verified,
                           stage="done" if verified else "done_unverified",
                           note="" if verified else "已点击发送但未能在会话中确认，请人工核对")
             logger.success(f"已发送打招呼(verified={verified}): {greeting_text[:36]}…")
             self._back()
             return result
+        except RiskControlError as e:
+            self._audit("risk", target=getattr(job, "job_id", "") or "",
+                        outcome="warn", where="greet", keyword=str(e)[:40])
+            return fail("risk", "触发平台安全验证——已暂停，请人工在浏览器完成后重试")
         except Exception as e:
             return fail("exception", f"{type(e).__name__}: {e}"[:120])
 

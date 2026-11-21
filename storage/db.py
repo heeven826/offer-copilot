@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS replies (
     text        TEXT,
     created_at  TEXT
 );
+CREATE TABLE IF NOT EXISTS audit (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT,
+    action      TEXT,          -- detail / greet / reply / resume / risk / truncate
+    target      TEXT,          -- job_id 或会话名
+    outcome     TEXT,          -- ok / fail / warn
+    detail      TEXT           -- JSON: {duration, jd_len, stage, msg_len, ...}
+);
 CREATE TABLE IF NOT EXISTS state (
     key         TEXT PRIMARY KEY,
     value       TEXT
@@ -166,6 +174,32 @@ class Database:
              datetime.now().isoformat(timespec="seconds")),
         )
         self.conn.commit()
+
+    # ---------- 操作审计（REQ-10：agent 代操作的一屏回看与健康指标原料） ----------
+
+    def audit(self, action: str, target: str = "", outcome: str = "ok", **detail):
+        """记录一条审计事件（greet/detail/risk 等，Communicator/inbox 自动调用）。"""
+        from datetime import datetime
+        self.conn.execute(
+            "INSERT INTO audit (ts, action, target, outcome, detail) VALUES (?,?,?,?,?)",
+            (datetime.now().isoformat(timespec="seconds"), action, target, outcome,
+             json.dumps(detail, ensure_ascii=False)))
+        self.conn.commit()
+
+    def audit_rows(self, action: str = "", since_like: str = "") -> list:
+        """查询审计事件（health/诊断用）。"""
+        sql, params = "SELECT * FROM audit", []
+        cond = []
+        if action:
+            cond.append("action=?")
+            params.append(action)
+        if since_like:
+            cond.append("ts LIKE ?")
+            params.append(since_like + "%")
+        if cond:
+            sql += " WHERE " + " AND ".join(cond)
+        sql += " ORDER BY id DESC"
+        return self.conn.execute(sql, params).fetchall()
 
     # ---------- 跨进程护栏状态（CLI 每次调用是新进程，节奏状态须持久化） ----------
 
