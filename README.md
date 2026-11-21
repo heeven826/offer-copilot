@@ -76,6 +76,23 @@ $PY cli.py run --max-greets 5            # 正式
 
 Windows 可双击 `start.bat`（交互菜单）或 `boss.bat <子命令>`。
 
+## 更新
+
+技能说明和引擎代码是两层，**都要更新**（只跑 ① 不跑 ② 等于没更——核心修复通常在代码层）：
+
+```bash
+# ① 更新技能说明（在你安装技能的目录下；全局装的加 -g）
+npx skills update offer-copilot -y
+
+# ② 更新引擎代码（你 clone 的仓库目录）
+cd <你clone的仓库目录> && git pull
+
+# ③ 更新后自检（8 项体检：登录/期望标签/卡片/沟通按钮/输入框/发送按钮）
+python cli.py doctor
+```
+
+8/8 全绿即正常；有失败项会给出原因和对应选择器名——大概率是站点改版，欢迎提 issue。
+
 ## 处理流程
 
 ```
