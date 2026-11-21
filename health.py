@@ -51,32 +51,43 @@ def truncate_rate(events: list, window: int = 30) -> dict:
 
 
 def score_drift(score_rows: list) -> dict:
-    """打分分布周漂移：本周 vs 上周平均分（applications 表为原料）。
+    """打分分布周漂移：本周 vs 上周平均分。
 
-    rows=[{'score':int,'created_at':'YYYY-MM-DD...'}]
-    样本不足只报基线状态不判漂移（P0 阶段就是攒基线）。
+    R14-1 修复：score<=0 视为"未评分"（agent 模式早期 greet 不传分，落库默认 0），
+    统计只认 score>0 的行，未评分数单独报（unscored），不混入均值——
+    否则样本到量会被拉到接近 0，误报"评分崩塌"。
     """
     today = date.today()
     wk_start = today - timedelta(days=today.weekday())      # 本周一
     last_start = wk_start - timedelta(days=7)
 
+    valid = [r for r in score_rows if (r.get("score") or 0) > 0]
+    unscored = len(score_rows) - len(valid)
+
     def _avg(rows):
-        scores = [r["score"] for r in rows if r.get("score") is not None]
+        scores = [r["score"] for r in rows]
         return (round(sum(scores) / len(scores), 2), len(scores)) if scores else (None, 0)
 
-    this_rows = [r for r in score_rows if r["created_at"][:10] >= str(wk_start)]
-    last_rows = [r for r in score_rows
+    this_rows = [r for r in valid if r["created_at"][:10] >= str(wk_start)]
+    last_rows = [r for r in valid
                  if str(last_start) <= r["created_at"][:10] < str(wk_start)]
     this_avg, this_n = _avg(this_rows)
     last_avg, last_n = _avg(last_rows)
     judgeable = bool(last_n >= 10 and this_n >= 10)
-    # 样本不足不判漂移（反噪声原则：样本不足的差值是噪声不是信号）
+    # 样本不足不判漂移（反噪声原则）+ 明示差多少（R14 note）
     drift = (round(this_avg - last_avg, 2)
              if judgeable and this_avg is not None and last_avg is not None else None)
+    insufficient = None
+    if not judgeable:
+        need = max(0, 10 - this_n)
+        need_last = max(0, 10 - last_n)
+        insufficient = f"本周还差{need}个有效样本，上周还差{need_last}个（各需10）"
     return {"this_week": {"avg": this_avg, "samples": this_n},
             "last_week": {"avg": last_avg, "samples": last_n},
+            "unscored_excluded": unscored,
             "drift": drift,
-            "judgeable": judgeable}
+            "judgeable": judgeable,
+            "insufficient": insufficient}
 
 
 def summarize(db, cfg: dict) -> dict:
@@ -130,9 +141,9 @@ def summarize(db, cfg: dict) -> dict:
         warnings.append({"code": "MSG_TRUNCATE_HIGH",
                          "hint": f"话术超长截断率 {tr['value']:.0%} > {tr_line:.0%}——提示词长度约束在失效"})
 
-    # ---- 哨兵 3：打分周漂移（攒基线为主） ----
+    # ---- 哨兵 3：打分周漂移（攒基线为主；R14-1：只统计 score>0） ----
     score_rows = [dict(r) for r in db.conn.execute(
-        "SELECT score, created_at FROM applications WHERE score IS NOT NULL")]
+        "SELECT score, created_at FROM applications")]
     sd = score_drift(score_rows)
     if sd["judgeable"] and abs(sd["drift"]) >= 1.5:
         warnings.append({"code": "SCORE_DRIFT",

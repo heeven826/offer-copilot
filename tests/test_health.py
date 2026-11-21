@@ -56,6 +56,16 @@ class TestDrift(unittest.TestCase):
         sd = score_drift(rows)
         self.assertFalse(sd["judgeable"])
         self.assertIsNone(sd["drift"])
+        self.assertIn("还差", sd["insufficient"])             # R14 note：明示差多少
+
+    def test_zero_scores_excluded(self):
+        """R14-1：score=0（未评分）不得混入均值——防'评分崩塌'假警报。"""
+        rows = self._rows(1, 8, 12) + self._rows(8, 5, 12)
+        zeros = [{"score": 0, "created_at": (date.today() - timedelta(days=1)).isoformat()}] * 20
+        sd = score_drift(rows + zeros)
+        self.assertEqual(sd["this_week"]["samples"], 12)      # 0分被排除
+        self.assertEqual(sd["unscored_excluded"], 20)
+        self.assertEqual(sd["drift"], 3.0)                    # 均值不被拉低
 
 
 class TestSummarize(unittest.TestCase):

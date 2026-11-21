@@ -442,9 +442,9 @@ def cmd_greet(args):
         out(error=f"greet_failed[{res.get('stage')}]: {res.get('note', '')}")
     db.mark_job(args.job_id, "greeted")    # upsert：jobs 行不存在也能写入（P0-1 修复）
     db.record(Application(args.job_id, args.title or "", "",
-                          status="greeted", greeting=msg))
+                          status="greeted", score=args.score, greeting=msg))
     out({"job_id": args.job_id, "sent": True, "verified": res.get("verified"),
-         "sent_text": msg[:60], "stage": res.get("stage"),
+         "sent_text": msg[:60], "stage": res.get("stage"), "score": args.score,
          "today_greeted_by_tool": cap.used()})
 
 
@@ -457,6 +457,7 @@ def cmd_inbox(args):
         # 存量视图：全量会话（不打开、只读接口数据）—— 面试准备/存量清扫用
         import html as _html
         friends = inbox._capture_friends()
+        inbox._audit("inbox_all", outcome="ok", count=len(friends))
         data = []
         for f in friends:
             last = _html.unescape(f.get("lastMsg") or "")
@@ -489,9 +490,11 @@ def cmd_reply(args):
     if not inbox.find_and_open(args.name, args.brand or ""):
         out(error=f"conversation_not_found({args.name})")
     if not inbox._reply(msg):
+        inbox._audit("reply", target=args.name, outcome="fail", msg_len=len(msg))
         out(error="reply_failed（输入框/发送按钮异常，可跑 doctor 诊断）")
     db.set_state("last_greet_ts", str(time.time()))
     db.record_reply(args.name, args.brand or "", "reply", msg)
+    inbox._audit("reply", target=args.name, outcome="ok", msg_len=len(msg))
     out({"to": args.name, "sent": True, "message": msg})
 
 
@@ -503,8 +506,10 @@ def cmd_resume(args):
     if not inbox.find_and_open(args.name, args.brand or ""):
         out(error=f"conversation_not_found({args.name})")
     if not inbox._send_resume():
+        inbox._audit("resume", target=args.name, outcome="fail")
         out(error="resume_failed（按钮不可用：需双方回复过；或未找到）")
     db.record_reply(args.name, args.brand or "", "resume", "")
+    inbox._audit("resume", target=args.name, outcome="ok")
     out({"to": args.name, "resume_sent": True})
 
 
@@ -634,6 +639,8 @@ def main():
                    help="从文件读取话术（规避 argv 编码/引号问题，UTF-8）")
     g.add_argument("--title", default="")
     g.add_argument("--company", default="")
+    g.add_argument("--score", type=float, default=0.0,
+                   help="agent 模式传入自己的加权评分（0-10，允许小数）——喂 REQ-10 周漂移与 REQ-05 闸门")
     i = sub.add_parser("inbox", help="读取未读会话与消息（只读）")
     i.add_argument("--max", type=int, default=5)
     i.add_argument("--all", action="store_true", help="全量会话存量视图（含最后消息，不打开会话）")

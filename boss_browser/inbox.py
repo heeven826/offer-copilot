@@ -41,6 +41,14 @@ class InboxProcessor:
         self.db = db
         self.profile = profile
 
+    def _audit(self, action: str, target: str = "", outcome: str = "ok", **detail):
+        """操作审计（REQ-10，R14-2 补齐）。"""
+        try:
+            if self.db:
+                self.db.audit(action, target, outcome, **detail)
+        except Exception:
+            pass
+
     @staticmethod
     def _jitter_click(ele, xr, yr):
         try:
@@ -165,6 +173,7 @@ class InboxProcessor:
         """
         result = []
         unread = self.unread_conversations(max_conv)
+        self._audit("inbox", outcome="ok", unread=len(unread), max=max_conv)
         for f in unread:
             name = f.get("name") or "?"
             entry = {
@@ -197,6 +206,7 @@ class InboxProcessor:
         friend = {"name": name, "brandName": brand}
         item = self._find_conversation(friend)
         if not item:
+            self._audit("open_conversation", target=name, outcome="fail", brand=brand)
             return False
         self._jitter_click(item, (-80, 80), (-6, 6))
         sleep_range(2, 3, "等待会话打开")
