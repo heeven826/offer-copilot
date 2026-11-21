@@ -1,5 +1,5 @@
 ---
-name: boss-zhipin
+name: offer-copilot
 description: Boss直聘自动求职助手——操控用户本地Chrome获取期望职位推荐、AI筛选评估、自动打招呼、收件箱回复与简历发送、职位档案沉淀与面试准备。当用户提到：投简历/打招呼/Boss直聘/求职/看机会/职位筛选/HR回复了/发简历/面试准备/薪资分析 等意图时使用本技能。
 whenToUse: 用户想要浏览或筛选Boss直聘职位、自动或半自动投递打招呼、处理HR未读消息、发送简历、或基于历史投递档案做面试准备和简历优化时。涉及真实消息发送的动作必须先经用户确认。
 ---
@@ -14,7 +14,7 @@ whenToUse: 用户想要浏览或筛选Boss直聘职位、自动或半自动投�
 
 ```bash
 # ① 获取项目（尚未安装时）
-git clone <本项目仓库地址> boss-zhipin && cd boss-zhipin
+git clone https://github.com/heeven826/offer-copilot.git && cd offer-copilot
 
 # ② Python 环境（需要 3.10+；Windows 用 py，mac/linux 用 python3）
 py -m venv .venv                        # 或 python3 -m venv .venv

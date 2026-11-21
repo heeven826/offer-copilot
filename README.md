@@ -1,4 +1,4 @@
-# boss-zhipin —— Boss直聘 AI 求职助手
+# offer-copilot —— Boss直聘 AI 求职助手
 
 操控你本机的 Chrome（保留真实浏览器指纹与登录态），获取期望职位推荐 → AI 评估匹配度 → 自动打招呼 → 收件箱回复/发简历 → 全程职位档案沉淀（简历优化/面试准备素材）。
 
@@ -11,7 +11,7 @@
 ## 安装
 
 ```bash
-git clone <本仓库> boss-zhipin && cd boss-zhipin
+git clone https://github.com/heeven826/offer-copilot.git && cd offer-copilot
 
 # Python 3.10+
 py -m venv .venv                        # mac/linux: python3 -m venv .venv
@@ -31,7 +31,7 @@ py -m venv .venv                        # mac/linux: python3 -m venv .venv
 本仓库是一个标准的 [Agent Skill](https://github.com/vercel-labs/skills)（`skill/boss-zhipin/SKILL.md`）：
 
 ```bash
-npx skills add <你的GitHub用户名>/boss-zhipin    # 安装到你的 harness
+npx skills add heeven826/offer-copilot    # 安装到你的 harness
 ```
 
 然后在 DeepSeek Harness / Claude Code 等支持技能的 agent 里直接说：
@@ -74,7 +74,7 @@ Windows 可双击 `start.bat`（交互菜单）或 `boss.bat <子命令>`。
 ```
 cli.py                原子 CLI（agent 友好，JSON 输出，护栏内置）
 main.py               全自主模式入口
-skill/boss-zhipin/    Agent Skill（SKILL.md：打分标准/话术规则/SOP）
+skill/offer-copilot/  Agent Skill（SKILL.md：打分标准/话术规则/SOP）
 boss_browser/         browser(接管Chrome) · expect_page(列表采集/翻页)
                       actions(打招呼/详情) · inbox(收件箱) · risk(风控暂停)
 ai/                   judge(两阶段评估) · greeting(分对象/中英文话术) · reply
