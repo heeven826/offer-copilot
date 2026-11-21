@@ -161,16 +161,24 @@ def process_job(job: Job, ctx: dict) -> str:
     # ---- 生成话术（JD 英文 → 英文话术）并发送 ----
     greeting = generate_greeting(job, ctx["profile"], fallback)
 
-    ok = ctx["comm"].greet(greeting, job=job, detail_open=True)
-    status = "greeted" if ok else "failed"
-    if ok and ctx["cfg"].get("apply", {}).get("send_resume_card"):
+    res = ctx["comm"].greet(greeting, job=job, detail_open=True)
+    if not res.get("ok"):
+        ctx["db"].mark_job(job.job_id, "failed")
+        ctx["db"].record(Application(job.job_id, job.title, job.company, status="failed",
+                                     score=jr2.score,
+                                     reason=f"[{res.get('stage')}] {res.get('note', '')}"[:80],
+                                     greeting=greeting))
+        # 已在会话中的不算失败——标记 skipped 避免反复尝试
+        if res.get("stage") == "already_in_conversation":
+            ctx["db"].mark_job(job.job_id, "skipped")
+        return "failed"
+    status = "greeted"
+    if ctx["cfg"].get("apply", {}).get("send_resume_card"):
         if ctx["comm"].send_resume_card():
             status = "resume_sent"
     ctx["db"].mark_job(job.job_id, status)
     ctx["db"].record(Application(job.job_id, job.title, job.company, status=status,
-                                 score=jr.score, reason=jr.reasons, greeting=greeting))
-    if not ok:
-        return "failed"
+                                 score=jr2.score, reason=jr2.reasons, greeting=greeting))
     stats["greeted"] += 1
     ctx["limiter"].wait_greet()
     # 拟人长休息：像人一样偶尔停下来干点别的

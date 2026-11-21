@@ -45,7 +45,9 @@ def hard_filter(job, cfg: dict):
                 city = (job.location.split() or [job.location])[0]
                 return False, f"城市不符（{city}）"
 
-    # 2. 薪资区间带：按折算12薪的月薪下限比较（月薪×月数，16薪优势体现出来）
+    # 2. 薪资区间带：按折算12薪的月薪下限比较（月薪×月数÷12）。
+    #    上限可为 null = 不限高。注意：上限是"刻意收紧的召回过滤"——
+    #    追求匹配精确可设上限（如 60），追求召回设 null。
     band = f.get("salary_band_k") or []
     if len(band) == 2:
         lo, months = parse_salary(job.salary)
@@ -53,7 +55,7 @@ def hard_filter(job, cfg: dict):
             eff = effective_monthly(lo, months)
             if eff < band[0]:
                 return False, f"薪资低于下限（{job.salary} = 折算{eff:.0f}K/月）"
-            if eff > band[1]:
+            if band[1] is not None and eff > band[1]:
                 return False, f"薪资超预期（{job.salary} = 折算{eff:.0f}K/月）"
 
     # 3. 黑名单关键词

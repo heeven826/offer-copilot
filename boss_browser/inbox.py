@@ -78,7 +78,10 @@ class InboxProcessor:
     # ---------- 交互 ----------
 
     def _find_conversation(self, friend: dict):
-        """在会话列表 DOM 中按姓名+公司定位会话项。"""
+        """在会话列表 DOM 中按姓名+公司定位会话项。
+
+        2026-11 实测：li 本身点击已失效，必须点内部 .friend-content。
+        """
         name = friend.get("name") or ""
         brand = friend.get("brandName") or ""
         for it in self.tab.eles(SELECTORS["conv_item"]):
@@ -86,7 +89,9 @@ class InboxProcessor:
                 nm = it.ele(SELECTORS["conv_name"], timeout=0.5)
                 if nm and (nm.text or "").strip() == name:
                     if not brand or brand in (it.text or ""):
-                        return it
+                        # 返回内部可点击元素
+                        inner = it.ele("css:div.friend-content", timeout=0.5)
+                        return inner or it
             except Exception:
                 continue
         return None

@@ -35,8 +35,11 @@ py -m venv .venv                        # mac/linux: python3 -m venv .venv
 
 # 个人配置
 #  1) 复制 profile.example.yaml → profile.yaml，填写你的求职画像
-#  2) 检查 config.yaml（城市白名单/薪资带/节奏）
-#  3) 检查 .env.example → .env（如需内置 AI 评估；走 agent 技能用法可不填）
+#  2) 复制 config.example.yaml → config.yaml，调整城市白名单/薪资带/节奏
+#  3) 检查 .env.example → .env（如需内置 AI 评估的自主模式 run；agent 技能用法可不填）
+
+# 环境自检（登录/期望标签/关键选择器逐项体检）
+.venv/Scripts/python cli.py doctor
 
 # 首次登录（拉起 Chrome 扫码）
 .venv/Scripts/python cli.py setup
@@ -44,7 +47,7 @@ py -m venv .venv                        # mac/linux: python3 -m venv .venv
 
 ## 用法一：AI Agent 技能
 
-本仓库是一个标准的 [Agent Skill](https://github.com/vercel-labs/skills)（`skill/boss-zhipin/SKILL.md`）：
+本仓库是一个标准的 [Agent Skill](https://github.com/vercel-labs/skills)（`skill/offer-copilot/SKILL.md`）：
 
 ```bash
 npx skills add heeven826/offer-copilot    # 安装到你的 harness
