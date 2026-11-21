@@ -14,3 +14,13 @@ __pycache__/
 *.pyc
 .claude/
 *.db
+.agents/
+.lingma/
+.trae/
+.trae-cn/
+.zcode/
+.codex/
+.cursor/
+.gemini/
+.opencode/
+skills-lock.json

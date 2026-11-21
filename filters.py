@@ -38,10 +38,19 @@ def compute_alignment(expect_tabs: list, target_roles: list) -> dict:
 
     overlap, evidence = [], []
     for kw in DIRECTION_KEYWORDS:
-        if kw in STOPWORDS:
+        if kw in STOPWORDS:   # 契约：DIRECTION_KEYWORDS 不得含停用词（测试有断言）
             continue
-        hit_roles = [r for r in roles if kw in r.lower()]
-        hit_tabs = [t for t in tabs if kw in t.lower()]
+        if kw.isascii():
+            # ASCII 词只防止英文/数字邻接（trainee/email/storage 里的 ai/rag），
+            # 中文邻接是合法的（如 "AI应用"、"RAG工程师"）——中文是 \w，不能用 \b
+            pat = re.compile(rf"(?<![a-zA-Z0-9]){re.escape(kw)}(?![a-zA-Z0-9])",
+                             re.IGNORECASE)
+            hit_roles = [r for r in roles if pat.search(r)]
+            hit_tabs = [t for t in tabs if pat.search(t)]
+        else:
+            # 中文词用子串匹配
+            hit_roles = [r for r in roles if kw in r]
+            hit_tabs = [t for t in tabs if kw in t]
         if hit_roles and hit_tabs:
             overlap.append(kw)
             evidence.append({"token": kw, "roles": hit_roles, "tabs": hit_tabs})

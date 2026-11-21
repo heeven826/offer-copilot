@@ -64,9 +64,16 @@ _OUT_FILE = None
 
 
 def out(data=None, error=None, code=None):
-    """统一 JSON 输出后退出；--out 时同步写 UTF-8 文件。code 可显式指定。"""
+    """统一 JSON 输出后退出；--out 时同步写 UTF-8 文件。
+
+    ok / data / error / 退出码 四者保持一致：
+    - ok:true  → 无 error，退出码 0
+    - ok:false → 有 error（可同时携带 data 供诊断，如 doctor 的 checks），退出码 1
+    """
     if error is not None:
         payload = {"ok": False, "error": error}
+        if data is not None:
+            payload["data"] = data
         code = 1 if code is None else code
     else:
         payload = {"ok": True, "data": data}
@@ -85,6 +92,17 @@ def chrome_help_error(e, cfg) -> str:
             f"  chrome --remote-debugging-port={port} --user-data-dir=./chrome_profile\n"
             "（然后重跑本命令，CLI 会自动接管已有实例）\n"
             f"原始错误: {type(e).__name__}: {str(e)[:120]}")
+
+
+def probe_port(cfg) -> bool:
+    """socket 预探测调试端口（0.5s）。True=端口开（可接管）；False=未开（需拉起）。"""
+    import socket
+    port = int((cfg.get("browser") or {}).get("debug_port", 9222))
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 def load_cfg():
@@ -119,6 +137,11 @@ def wait_pace(db, key, rng, label):
 
 def connect(cfg, db):
     """连接 Chrome 并确认登录。"""
+    if not probe_port(cfg):
+        # 端口未开：DrissionPage 会尝试自动拉起 Chrome（冷启动约 30s，非卡死）。
+        # 正常桌面通常能拉起成功；受限环境会失败并给出手动启动指引。
+        print("[info] Chrome 未运行，尝试自动拉起（约30s，受限环境失败会提示手动启动）…",
+              file=sys.stderr)
     b = BossBrowser(cfg, ROOT)
     try:
         tab = b.connect()
@@ -126,6 +149,9 @@ def connect(cfg, db):
         out(error=chrome_help_error(e, cfg))
     if not b.ensure_login(timeout=120):
         out(error="not_logged_in（请运行 setup 扫码登录）")
+    if not b.session_alive():
+        out(error="login_stale: cookie 存在但登录态已失效（服务端会话过期）——"
+                  "请运行 setup 重新扫码登录")
     return tab
 
 
@@ -149,8 +175,10 @@ def target_roles_of(profile: dict) -> list:
 def cmd_doctor(args):
     """环境自检：登录/期望标签/关键选择器逐项体检，输出结构化结果。
 
-    用途：站点改版 vs 职位关闭 vs 环境问题 一眼分辨；
-    站点改版后跑一次即可定位哪些选择器失效。
+    契约（与 SKILL.md 一致）：
+    - 全过 → ok:true, data.ready=true, 退出码 0
+    - 未全过 → ok:false, error=摘要, data(checks/summary/ready), 退出码 1
+    - 选择器类检查带重试（页面刚拉起时可能未就绪）；多项同时失败时提示重跑
     """
     cfg = load_cfg()
     db = open_db(args)
@@ -159,17 +187,31 @@ def cmd_doctor(args):
     def add(name, ok, selector="", hint=""):
         checks.append({"name": name, "ok": bool(ok), "selector": selector, "hint": hint})
 
-    # 1. Chrome 连接
+    def retryable(fn, attempts=2, delay=1.8):
+        """选择器类检查重试：页面冷启动/半加载时的瞬态假阴性兜底。"""
+        for i in range(attempts):
+            try:
+                if fn():
+                    return True
+            except Exception:
+                pass
+            if i < attempts - 1:
+                time.sleep(delay)
+        return False
+
+    # 1. Chrome 连接（先 socket 预探测给出进度提示，避免静默 30s 被误判卡死）
+    if not probe_port(cfg):
+        print("[info] Chrome 未运行，尝试自动拉起（约30s，受限环境失败会提示手动启动）…",
+              file=sys.stderr)
     try:
         b = BossBrowser(cfg, ROOT)
         tab = b.connect()
         add("chrome_connect", True, hint=str(tab.url)[:60])
     except Exception as e:
         add("chrome_connect", False, "127.0.0.1:调试端口", hint=chrome_help_error(e, cfg))
-        # 早退也要有 summary/ready，且失败退出码为 1（agent 判断看 ready 与 exit code）
-        out({"checks": checks,
-             "summary": f"1/1 项检查失败：Chrome 未连接，后续检查跳过",
-             "ready": False}, code=1)
+        out(data={"checks": checks, "summary": "1/1 项检查失败：Chrome 未连接，后续检查跳过",
+                  "ready": False},
+            error="doctor_failed: Chrome 未连接（手动启动方法见 checks[0].hint）", code=1)
 
     # 2. 登录态
     login = b.ensure_login(timeout=60)
@@ -179,9 +221,11 @@ def cmd_doctor(args):
     en = ExpectNavigator(tab, cfg)
     en.open()
     tabs = en.expect_tabs()
-    add("expect_tabs", len(tabs) >= 1, "div.expect-list a.expect-item",
-        f"{len(tabs)} 个: " + ", ".join((t.text or '').split(chr(10))[0] for t in tabs))
-    add("job_cards", len(tab.eles("css:li.job-card-box")) >= 1,
+    add("expect_tabs", retryable(lambda: len(tab.eles("css:div.expect-list a.expect-item")) >= 1),
+        "div.expect-list a.expect-item",
+        (f"{len(tabs)} 个: " + ", ".join((t.text or '').split(chr(10))[0] for t in tabs))
+        if tabs else "0 个——login 通过但仍无标签 = 登录态已失效(cookie假阳性)，重跑 setup 扫码")
+    add("job_cards", retryable(lambda: len(tab.eles("css:li.job-card-box")) >= 1),
         "li.job-card-box", "期望页职位卡片")
     cards = tab.eles("css:li.job-card-box")
     greet_btn_ok = False
@@ -191,7 +235,7 @@ def cmd_doctor(args):
             time.sleep(2)
         except Exception:
             pass
-        greet_btn_ok = bool(tab.ele("css:a.op-btn-chat", timeout=3))
+        greet_btn_ok = retryable(lambda: bool(tab.ele("css:a.op-btn-chat", timeout=3)))
     add("greet_button", greet_btn_ok, "a.op-btn-chat", "详情面板「立即沟通」（需先点开卡片）")
 
     # 4. 聊天页：会话列表 + 输入框 + 发送按钮
@@ -200,7 +244,6 @@ def cmd_doctor(args):
     convs = tab.eles("css:li[role=listitem]")
     add("conversation_list", len(convs) >= 1, "li[role=listitem]",
         f"已渲染 {len(convs)} 个（虚拟列表，总数以 inbox --all 为准）")
-    chat_ok = False
     if convs:
         try:
             inner = convs[0].ele("css:div.friend-content", timeout=2)
@@ -209,13 +252,12 @@ def cmd_doctor(args):
         except Exception:
             pass
         comm = Communicator(tab, cfg, db)
-        inp = comm._first_ele(ACT_SELECTORS["chat_inputs"], timeout=4)
-        add("chat_input", bool(inp), " | ".join(ACT_SELECTORS["chat_inputs"]),
+        inp = retryable(lambda: bool(comm._first_ele(ACT_SELECTORS["chat_inputs"], timeout=4)))
+        add("chat_input", inp, " | ".join(ACT_SELECTORS["chat_inputs"]),
             "" if inp else "需先打开会话；都不在则站点已改版")
-        send = comm._first_ele(ACT_SELECTORS["chat_sends"], timeout=3)
-        add("chat_send", bool(send), " | ".join(ACT_SELECTORS["chat_sends"]),
+        send = retryable(lambda: bool(comm._first_ele(ACT_SELECTORS["chat_sends"], timeout=3)))
+        add("chat_send", send, " | ".join(ACT_SELECTORS["chat_sends"]),
             "" if send else "需先打开会话且有输入")
-        chat_ok = bool(inp and send)
     else:
         add("chat_input", False, "", "无会话，无法测输入区")
         add("chat_send", False, "", "无会话，无法测发送按钮")
@@ -223,10 +265,22 @@ def cmd_doctor(args):
 
     n_ok = sum(1 for c in checks if c["ok"])
     ready = n_ok == len(checks)
-    out({"checks": checks, "summary": f"{n_ok}/{len(checks)} 项通过",
-         "ready": ready,
-         "hint": "判断自检是否通过看 ready 字段与退出码（0=通过）；"
-                 "选择器类失败 = 站点改版，需要更新 SELECTORS"}, code=0 if ready else 1)
+    # 自适应提示：多项选择器同时失败 → 大概率页面未就绪而非站点改版
+    selector_names = {"expect_tabs", "job_cards", "greet_button", "chat_input", "chat_send"}
+    failed_selectors = [c["name"] for c in checks
+                        if not c["ok"] and c["name"] in selector_names]
+    if ready:
+        hint = "全部通过"
+    elif len(failed_selectors) >= 2:
+        hint = ("多项选择器检查同时失败，大概率是页面未就绪（刚拉起/半加载），"
+                "重跑一次 doctor 再判断；仍失败才考虑站点改版")
+    else:
+        hint = "单项失败看对应 checks[].hint；选择器类持续失败 = 站点改版"
+    payload = {"checks": checks, "summary": f"{n_ok}/{len(checks)} 项通过",
+               "ready": ready, "hint": hint}
+    if ready:
+        out(payload)
+    out(data=payload, error=f"doctor_failed: {n_ok}/{len(checks)} 项通过（{hint}）", code=1)
 
 
 def cmd_status(args):
@@ -447,12 +501,13 @@ def cmd_archive(args):
             raw = json.loads(r["raw_json"] or "{}")
         except Exception:
             raw = {}
+        jd_full = raw.get("job_desc", "") or ""
         data.append({
             "job_id": r["job_id"], "title": r["title"], "salary": raw.get("salary", ""),
             "company": raw.get("company", ""), "location": raw.get("location", ""),
             "tags": raw.get("tags", []), "score": r["score"], "status": r["status"],
-            "job_desc": (raw.get("job_desc", "") or "")[:400], "link": r["link"],
-            "first_seen": r["first_seen"],
+            "job_desc_preview": jd_full[:400], "jd_len": len(jd_full),
+            "link": r["link"], "first_seen": r["first_seen"],
         })
     out({"count": len(data), "jobs": data})
 
@@ -465,6 +520,17 @@ def cmd_setup(args):
     print("等待登录（如浏览器显示登录页请扫码，最长等5分钟）…", file=sys.stderr)
     if not b.ensure_login(timeout=300):
         out(error="login_timeout")
+    # cookie 假阳性兜底：等真实登录态（期望标签渲染）生效；失效则提示重新扫码
+    if not b.session_alive(max_wait=8):
+        print("[info] 检测到登录态失效（cookie 在但服务端未登录），"
+              "请在浏览器中重新扫码，等待生效…", file=sys.stderr)
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            if b.session_alive(max_wait=6):
+                break
+            time.sleep(6)
+        else:
+            out(error="login_stale: 5 分钟内未恢复登录态，请手动扫码后重跑 setup")
     en = ExpectNavigator(tab, cfg)
     en.open()
     tabs = en.expect_tabs()

@@ -37,15 +37,16 @@ $PY cli.py status                       # 看到 expect_tabs 与配额即就绪
 Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）。
 
 - `status` 返回 `not_logged_in` → 运行 `setup` 引导用户扫码
-- Chrome 未启动 → CLI 会自动拉起（独立配置目录 chrome_profile/，与日常浏览器互不影响）
-- 报 `chrome_not_running`（自动拉起失败，常见于受限桌面）→ 让用户手动启动后重跑，CLI 会接管已有实例：
+- Chrome 未启动 → CLI 会**尝试**自动拉起（约30s，stderr 有进度提示）；**冷启动或受限桌面环境下自动拉起通常失败**（报 chrome_not_running）→ 让用户手动启动一次，之后 CLI 会接管已有实例：
   `chrome --remote-debugging-port=9222 --user-data-dir=./chrome_profile`
 
-## 1. 命令速查（全部输出 UTF-8 JSON：{"ok":..., "data"/"error"}）
+## 1. 命令速查（全部输出 UTF-8 JSON）
+
+**输出契约**：`ok:true` = 成功（退出码 0）；`ok:false` = 失败（退出码 1，error 字段给原因，doctor 失败时附带 data.checks 供诊断）。
 
 | 命令 | 作用 | 护栏（CLI 内置强制） |
 |---|---|---|
-| `doctor` | **环境自检**：登录/期望标签/关键选择器逐项体检，失败时先跑它 | 只读 |
+| `doctor` | **环境自检**：登录/期望标签/关键选择器逐项体检。**判定看 data.ready 与退出码**：未全过时 `ok:false`、`ready:false`、退出码 1；多项选择器同时失败=页面未就绪，重跑一次再判断 | 只读 |
 | `status` | 登录态/期望职位/配额/配置/**目标方向一致性** | 只读 |
 | `jobs` | 当前期望页职位列表（含硬过滤与去重标注） | 只读 |
 | `detail <job_id> --title 职位名` | 打开详情抓职位描述(JD) | 30-40s 查看间隔 |
@@ -133,5 +134,5 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 | `daily_cap_reached` | 告知用户今日已达上限，明天再跑 |
 | `already_done` | 正常查重，跳过即可 |
 | `greet_failed` | 看 `[stage]`：`already_in_conversation` 跳过；`chat_input`/`send_*` 阶段已产生空会话需告知用户；选择器类失败先跑 `doctor` |
-| `chrome_not_running` | 让用户手动启动：`chrome --remote-debugging-port=9222 --user-data-dir=./chrome_profile`，重跑即接管 |
-| Chrome 没反应 | CLI 自动拉起；若端口冲突提示，让用户关闭旧的调试 Chrome |
+| `chrome_not_running` | 自动拉起失败（冷启动/受限桌面常见）。让用户手动启动：`chrome --remote-debugging-port=<端口> --user-data-dir=./chrome_profile`，重跑即接管 |
+| Chrome 没反应 | CLI 尝试自动拉起（约30s，非卡死）；失败则按 chrome_not_running 处理 |

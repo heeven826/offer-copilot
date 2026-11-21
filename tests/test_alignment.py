@@ -52,6 +52,23 @@ class TestAlignment(unittest.TestCase):
         r = compute_alignment(["全栈工程师(北京)"], ["全栈开发"])
         self.assertTrue(r["aligned"])   # "全栈" 是方向词，双侧命中
 
+    def test_ascii_word_boundary(self):
+        """ASCII 关键词必须词边界匹配："ai" 不得命中 trainee/email。"""
+        r = compute_alignment(["Senior Trainee(北京)", "Email平台"],
+                              ["AI 技术总监", "retail 专家"])
+        self.assertFalse(r["aligned"])  # trainee/email/retail 都不是 ai
+        r2 = compute_alignment(["AI平台(北京)"], ["AI 技术总监"])
+        self.assertTrue(r2["aligned"])  # 真正的 AI 词命中
+
+    def test_rag_not_storage(self):
+        r = compute_alignment(["Storage Engineer(北京)"], ["RAG 工程师"])
+        self.assertFalse(r["aligned"])  # "rag" 不得命中 storage
+
+    def test_keywords_stopwords_contract(self):
+        """契约：方向词表与停用词表不得有交集（filters 里的守卫不是死代码）。"""
+        from filters import DIRECTION_KEYWORDS, STOPWORDS
+        self.assertFalse(set(DIRECTION_KEYWORDS) & STOPWORDS)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

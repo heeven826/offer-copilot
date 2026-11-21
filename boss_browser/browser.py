@@ -63,6 +63,26 @@ class BossBrowser:
         logger.error("等待登录超时")
         return False
 
+    def session_alive(self, max_wait: int = 10) -> bool:
+        """真实登录态复核：cookie 可能存在但服务端会话已失效（假阳性）。
+
+        打开期望页看「期望职位标签」是否渲染——只有真登录才会出现。
+        """
+        from .expect_page import EXPECT_URL, SELECTORS as EP_SEL
+        try:
+            self.tab.get(EXPECT_URL)
+            deadline = time.time() + max_wait
+            while time.time() < deadline:
+                try:
+                    if self.tab.eles(EP_SEL["expect_tabs"], timeout=2):
+                        return True
+                except Exception:
+                    pass
+                time.sleep(1.5)
+        except Exception:
+            pass
+        return False
+
     def _looks_logged_in(self) -> bool:
         """粗略判断登录态。
 
