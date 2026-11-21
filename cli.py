@@ -342,18 +342,22 @@ def cmd_jobs(args):
                 link=f"https://www.zhipin.com/job_detail/{raw.get('encryptJobId','')}.html")
         db.save_job(j)          # 全量落库（archive/去重依赖；status 默认 seen，不覆盖已有终态）
         ok, why = hard_filter(j, cfg)
-        sig = direction_signal(" ".join(filter(None, [
-            raw.get("jobName", ""), " ".join(raw.get("skills") or []),
+        # R9-1：标题与平台标签拆两路——标签普遍偏乐观（Java岗也带AI标签），
+        # direction_match 只认标题命中，标签仅作辅助信号
+        sig_title = direction_signal(raw.get("jobName", ""))
+        sig_tags = direction_signal(" ".join(filter(None, [
+            " ".join(raw.get("skills") or []),
             " ".join(raw.get("jobLabels") or [])])))
-        dmatch = direction_match(sig, roles)
+        dmatch = direction_match(sig_title, roles)
         data.append({
             "job_id": raw.get("encryptJobId", ""),
             "title": raw.get("jobName", ""),
             "salary": raw.get("salaryDesc", ""),
             "effective_monthly_k": round(eff, 1) if eff else None,
-            "direction_keywords": sig,
-            "direction_match": dmatch,   # 与画像目标的交集（R8-2 三态判断）
-            "no_direction_signal": not sig,   # true=无方向证据（区别于方向不符，R7 OBS-3）
+            "direction_keywords": sig_title,          # 标题命中（高置信）
+            "direction_keywords_tags": sig_tags,      # 平台标签命中（辅助，偏乐观）
+            "direction_match": dmatch,   # 标题关键词与画像的交集（R8-2 三态判断的正向依据）
+            "no_direction_signal": not (sig_title or sig_tags),
             "company": raw.get("brandName", ""),
             "company_info": " · ".join(filter(None, [
                 raw.get("brandScaleName"), raw.get("brandStageName"),
