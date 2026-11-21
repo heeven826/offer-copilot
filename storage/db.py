@@ -93,22 +93,41 @@ class Database:
         self.conn.commit()
 
     def is_done(self, job_id: str) -> bool:
-        """该职位是否已有终态决定（跳过/已打招呼）—— 用于查重。"""
+        """该职位是否已有终态决定（跳过/已打招呼）—— 用于查重。
+
+        jobs 行可能从未落库（agent 流程早期版本不写 jobs 表），
+        回落查 applications 的投递记录，避免历史投递被重复打招呼。
+        """
         if not job_id:
             return False
         cur = self.conn.execute("SELECT status FROM jobs WHERE job_id=?", (job_id,))
         row = cur.fetchone()
-        return bool(row and row["status"] in DONE_STATUSES)
+        if row and row["status"] in DONE_STATUSES:
+            return True
+        cur = self.conn.execute(
+            "SELECT 1 FROM applications WHERE job_id=? "
+            "AND status IN ('greeted', 'resume_sent') LIMIT 1",
+            (job_id,),
+        )
+        return cur.fetchone() is not None
 
     def mark_job(self, job_id: str, status: str):
-        self.conn.execute("UPDATE jobs SET status=? WHERE job_id=?", (status, job_id))
+        """写入处理终态；jobs 行可能不存在（agent 流程），必须 upsert。"""
+        self.conn.execute(
+            "INSERT INTO jobs (job_id, status) VALUES (?,?) "
+            "ON CONFLICT(job_id) DO UPDATE SET status=excluded.status",
+            (job_id, status),
+        )
         self.conn.commit()
 
     def update_job_desc(self, job: Job):
-        """职位描述抓取后回写档案（含 job_desc 的完整数据）。"""
+        """职位描述抓取后回写档案（含 job_desc 的完整数据）；行可能不存在，upsert。"""
         self.conn.execute(
-            "UPDATE jobs SET raw_json=? WHERE job_id=?",
-            (json.dumps(job.to_dict(), ensure_ascii=False), job.job_id))
+            "INSERT INTO jobs (job_id, title, salary, company, link, raw_json) "
+            "VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(job_id) DO UPDATE SET raw_json=excluded.raw_json",
+            (job.job_id, job.title, job.salary, job.company, job.link,
+             json.dumps(job.to_dict(), ensure_ascii=False)))
         self.conn.commit()
 
     # ---------- 投递记录 ----------

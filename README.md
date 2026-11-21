@@ -93,6 +93,18 @@ python cli.py doctor
 
 8/8 全绿即正常；有失败项会给出原因和对应选择器名——大概率是站点改版，欢迎提 issue。
 
+**仓库直读模式的兜底**：若 ① 报 `No installed skills found`、② 报 `not a git repository`（说明你当初是 tarball 直读/技能未注册进 harness）——以代码层为准，下载并覆盖源码即可，**保留** `.venv`、`chrome_profile`、`data`、`profile.yaml`、`.env`、`config.yaml` 这些本地资产：
+
+```bash
+curl -L https://github.com/heeven826/offer-copilot/archive/refs/heads/main.tar.gz | tar xz --strip-components=1
+```
+
+**受限沙箱里 pip 装不上**（AppContainer 类环境 tempdir 0700 导致 Permission denied）：用基础解释器的 pip 装进 venv 绕过 ensurepip：
+
+```powershell
+python -m pip --python .venv\Scripts\python.exe install -r requirements.txt
+```
+
 ## 处理流程
 
 ```

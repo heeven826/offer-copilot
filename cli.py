@@ -111,7 +111,13 @@ def wait_pace(db, key, rng, label):
 def connect(cfg, db):
     """连接 Chrome 并确认登录。"""
     b = BossBrowser(cfg, ROOT)
-    tab = b.connect()
+    try:
+        tab = b.connect()
+    except Exception as e:
+        out(error="chrome_not_running：Chrome 未运行且无法自动拉起。请手动启动：\n"
+                  "  chrome --remote-debugging-port=9222 --user-data-dir=./chrome_profile\n"
+                  "（然后重跑本命令，CLI 会自动接管已有实例）\n"
+                  f"原始错误: {type(e).__name__}: {str(e)[:100]}")
     if not b.ensure_login(timeout=120):
         out(error="not_logged_in（请运行 setup 扫码登录）")
     return tab
@@ -183,7 +189,8 @@ def cmd_doctor(args):
     tab.get("https://www.zhipin.com/web/geek/chat")
     time.sleep(3)
     convs = tab.eles("css:li[role=listitem]")
-    add("conversation_list", len(convs) >= 1, "li[role=listitem]", f"{len(convs)} 个会话")
+    add("conversation_list", len(convs) >= 1, "li[role=listitem]",
+        f"已渲染 {len(convs)} 个（虚拟列表，总数以 inbox --all 为准）")
     chat_ok = False
     if convs:
         try:
@@ -222,12 +229,27 @@ def cmd_status(args):
     cap = DailyCap(rate.get("daily_greet_limit", 40), db)
     profile = profile_of()
     roles = target_roles_of(profile)
+    tab_names = [(t.text or "").split("\n")[0] for t in tabs]
+    # 粗略字面重叠结论（agent 仍应语义复核）：任一 target 关键词出现在期望标签里即算有交集
+    overlap = []
+    for role in roles:
+        for name in tab_names:
+            for kw in (role, role[:2], role[-2:]):
+                if len(kw) >= 2 and kw in name:
+                    overlap.append(kw)
+                    break
+    aligned = bool(overlap) if roles and tab_names else True
     out({
         "login": True,
-        "expect_tabs": [(t.text or "").split("\n")[0] for t in tabs],
+        "expect_tabs": tab_names,
         "target_roles": roles,
-        "alignment_hint": ("职位来源=平台期望标签，匹配目标=profile.target_roles。"
-                           "两者方向需一致，否则池子里难以出现匹配职位（agent 应先核对并让用户调整）"),
+        "alignment": {
+            "aligned": aligned,
+            "overlap": sorted(set(overlap)),
+            "suggestion": ("" if aligned else
+                           "平台期望标签与 target_roles 无字面交集，大概率在不匹配的池子里空转；"
+                           "请语义复核后让用户改 Boss「期望管理」或 profile.yaml，改完再跑"),
+        },
         "today_greeted_by_tool": cap.used(),
         "daily_limit": cap.limit,
         "note": "today_greeted_by_tool 仅统计本工具发送的；平台侧（App/网页手动发送）不在此计数",
@@ -251,7 +273,19 @@ def cmd_jobs(args):
         lo, months = parse_salary(raw.get("salaryDesc") or "")
         eff = effective_monthly(lo, months) if lo else None
         j = Job(job_id=raw.get("encryptJobId", ""), title=raw.get("jobName", ""),
-                salary=raw.get("salaryDesc", ""), company=raw.get("brandName", ""))
+                salary=raw.get("salaryDesc", ""), company=raw.get("brandName", ""),
+                company_info=" · ".join(filter(None, [
+                    raw.get("brandScaleName"), raw.get("brandStageName"),
+                    raw.get("brandIndustry")])),
+                hr_name=raw.get("bossName", ""), hr_title=raw.get("bossTitle", ""),
+                tags=raw.get("skills") or [], welfare=raw.get("welfareList") or [],
+                location=" ".join(filter(None, [
+                    raw.get("cityName"), raw.get("areaDistrict"),
+                    raw.get("businessDistrict")])),
+                experience=raw.get("jobExperience", ""),
+                education=raw.get("jobDegree", ""),
+                link=f"https://www.zhipin.com/job_detail/{raw.get('encryptJobId','')}.html")
+        db.save_job(j)          # 全量落库（archive/去重依赖；status 默认 seen，不覆盖已有终态）
         ok, why = hard_filter(j, cfg)
         data.append({
             "job_id": raw.get("encryptJobId", ""),
@@ -287,7 +321,10 @@ def cmd_detail(args):
     jd = comm.open_detail(job)      # 内部自带 30-40s 跨进程节奏
     if jd is False:
         out(error="job_id_invalid")
-    if jd and args.title:          # JD 回写档案库（沉淀）
+    if args.title:
+        job.title = args.title      # title 一并落库（archive 可见）
+    db.save_job(job)                # 先确保 jobs 行存在（upsert 语义）
+    if jd:                          # JD 回写档案库（沉淀）
         job.job_desc = jd
         db.update_job_desc(job)
     out({"job_id": args.job_id, "job_desc": jd,
@@ -315,13 +352,16 @@ def cmd_greet(args):
     tab = connect(cfg, db)
     comm = Communicator(tab, cfg, db)
     job = Job(job_id=args.job_id, title=args.title or "")
+    if args.title:
+        job.title = args.title
+        db.save_job(job)            # title 落库
     res = comm.greet(msg, job=job)         # 内部含详情节奏/风控/拟人操作/发送验证
     if not res.get("ok"):
         db.mark_job(args.job_id, "failed")
         db.record(Application(args.job_id, args.title or "", "",
                               status="failed", greeting=msg))
         out(error=f"greet_failed[{res.get('stage')}]: {res.get('note', '')}")
-    db.mark_job(args.job_id, "greeted")
+    db.mark_job(args.job_id, "greeted")    # upsert：jobs 行不存在也能写入（P0-1 修复）
     db.record(Application(args.job_id, args.title or "", "",
                           status="greeted", greeting=msg))
     out({"job_id": args.job_id, "sent": True, "verified": res.get("verified"),
@@ -336,16 +376,20 @@ def cmd_inbox(args):
     inbox = InboxProcessor(tab, cfg, db, {})
     if getattr(args, "all", False):
         # 存量视图：全量会话（不打开、只读接口数据）—— 面试准备/存量清扫用
+        import html as _html
         friends = inbox._capture_friends()
-        data = [{
-            "name": f.get("name", ""),
-            "brand": f.get("brandName", ""),
-            "title": f.get("title", ""),
-            "unread": f.get("unreadMsgCount") or 0,
-            "last_msg": (f.get("lastMsg") or "")[:80],
-            "last_time": f.get("lastTime", ""),
-            "job_id": f.get("encryptJobId", ""),
-        } for f in friends]
+        data = []
+        for f in friends:
+            last = _html.unescape(f.get("lastMsg") or "")
+            data.append({
+                "name": f.get("name", ""),
+                "brand": f.get("brandName", ""),
+                "title": f.get("title", ""),
+                "unread": f.get("unreadMsgCount") or 0,
+                "last_msg": (last[:80] + "…") if len(last) > 80 else last,
+                "last_time": f.get("lastTime", ""),
+                "job_id": f.get("encryptJobId", ""),
+            })
         out({"count": len(data),
              "hint": "last_msg 为我方消息≈待对方回复；为对方消息≈待跟进；由 agent 结合内容判断状态",
              "conversations": data})
@@ -474,8 +518,10 @@ def cmd_run(args):
 def main():
     global _OUT_FILE
     argv = sys.argv[1:]
-    if argv and argv[0].startswith("-"):
-        argv = ["run"] + argv          # 兼容旧用法: python cli.py --dry-run
+    # 兼容旧用法：仅这三个参数开头的才路由到 run（安全：避免任意 - 参数
+    # 被劫持进全自动投递模式，如 `cli.py --out x status`）
+    if argv and argv[0] in ("--dry-run", "--max-jobs", "--max-greets"):
+        argv = ["run"] + argv
 
     p = argparse.ArgumentParser(description="offer-copilot CLI（agent 友好，UTF-8 JSON 输出）")
     p.add_argument("--out", help="JSON 同时写入该文件（UTF-8）")
@@ -516,12 +562,22 @@ def main():
     r2.add_argument("--max-jobs", type=int, default=0)
     r2.add_argument("--max-greets", type=int, default=0)
 
-    # --out/--db 是全局选项，也可放在子命令后
+    # --out/--db 是全局选项，也可放在子命令后；同时支持 --out x 与 --out=x 两种写法
     args, extra = p.parse_known_args(argv)
-    for item in extra:
-        if item.startswith("--out="):
+    skip_next = False
+    for i, item in enumerate(extra):
+        if skip_next:
+            skip_next = False
+            continue
+        if item == "--out" and i + 1 < len(extra):
+            _OUT_FILE = extra[i + 1]
+            skip_next = True
+        elif item.startswith("--out="):
             _OUT_FILE = item.split("=", 1)[1]
-        if item.startswith("--db="):
+        elif item == "--db" and i + 1 < len(extra):
+            args.db = extra[i + 1]
+            skip_next = True
+        elif item.startswith("--db="):
             args.db = item.split("=", 1)[1]
     if not _OUT_FILE:
         _OUT_FILE = getattr(args, "out", None)

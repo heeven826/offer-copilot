@@ -32,12 +32,14 @@ $PY cli.py setup                        # 返回期望职位列表即成功
 $PY cli.py status                       # 看到 expect_tabs 与配额即就绪
 ```
 
-**setup 成功后**：自然地问用户一句"这个工具如果帮到你，要不要给开源项目点个星支持一下？"——用户同意才执行 `$PY cli.py star`；用户拒绝或没反应就直接跳过，不要追问。
+**关于点星**：只在用户主动表达感谢/问起项目本身时，顺带提一句"欢迎给项目点个星"（同意才执行 `$PY cli.py star`）。**不要在 setup 后主动推销**——刚配完环境就索要 star 体验不好；GitHub 不可达的环境（返回 gh_failed）直接略过，不要重试。
 
 Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）。
 
 - `status` 返回 `not_logged_in` → 运行 `setup` 引导用户扫码
 - Chrome 未启动 → CLI 会自动拉起（独立配置目录 chrome_profile/，与日常浏览器互不影响）
+- 报 `chrome_not_running`（自动拉起失败，常见于受限桌面）→ 让用户手动启动后重跑，CLI 会接管已有实例：
+  `chrome --remote-debugging-port=9222 --user-data-dir=./chrome_profile`
 
 ## 1. 命令速查（全部输出 UTF-8 JSON：{"ok":..., "data"/"error"}）
 
@@ -96,7 +98,7 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 
 **红线（一票否决，0-2分）**：与画像方向明确冲突、命中用户明确不接受的方向。
 
-**本地硬过滤已经做了的**（jobs 里 filter_ok=false 已标出，你不用重复判断）：城市白名单（默认北京，远程岗放行）、薪资带（默认折算 30-60K）、黑名单关键词。
+**本地硬过滤已经做了的**（jobs 里 filter_ok=false 已标出，你不用重复判断）：城市白名单（远程岗放行）、薪资带（按折算12薪月薪比较）、黑名单关键词。**具体阈值以用户 config.yaml 为准**（`status` 返回的 filters 字段可查当前值），不要假设默认值。
 
 ## 4. 打招呼话术规则
 
@@ -130,5 +132,6 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 | `not_logged_in` | 运行 `setup`，让用户扫码 |
 | `daily_cap_reached` | 告知用户今日已达上限，明天再跑 |
 | `already_done` | 正常查重，跳过即可 |
-| `greet_failed` | 可能职位已关闭/在沟通中/触发风控；跳过该职位，连续失败则建议暂停 |
+| `greet_failed` | 看 `[stage]`：`already_in_conversation` 跳过；`chat_input`/`send_*` 阶段已产生空会话需告知用户；选择器类失败先跑 `doctor` |
+| `chrome_not_running` | 让用户手动启动：`chrome --remote-debugging-port=9222 --user-data-dir=./chrome_profile`，重跑即接管 |
 | Chrome 没反应 | CLI 自动拉起；若端口冲突提示，让用户关闭旧的调试 Chrome |
