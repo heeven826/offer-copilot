@@ -422,6 +422,8 @@ def cmd_greet(args):
         out(error="msg_required（--msg 或 --msg-file）")
     if len(msg) > 300:
         out(error=f"msg_too_long({len(msg)}>300)")
+    if not getattr(args, "score", 0):
+        print("[warn] 未提供 --score：打分哨兵/复审闸门将无数据（R15-1）", file=sys.stderr)
     cap = DailyCap(rate.get("daily_greet_limit", 40), db)
     if not cap.allow():
         out(error=f"daily_cap_reached({cap.limit})")
