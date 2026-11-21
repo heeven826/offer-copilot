@@ -54,6 +54,20 @@ class TestDedupFallback(unittest.TestCase):
         self.db.save_job(Job(job_id=jid, title="X"))
         self.assertTrue(self.db.is_done(jid))
 
+    def test_eval_does_not_break_dedup(self):
+        """R17-1 回归：已 greet 的职位再 eval（save_job 路径）不得降级 jobs.status。
+
+        eval 的写库路径 = save_job（INSERT OR IGNORE）+ applications，
+        绝不 UPDATE jobs.status——否则去重失效、可重复打招呼（P0-1 重演）。
+        """
+        jid = "evalid222"
+        self.db.mark_job(jid, "greeted")
+        # 模拟 cmd_eval 的写库路径
+        self.db.save_job(Job(job_id=jid, title="岗位", company="公司"))
+        self.db.record(Application(jid, "岗位", "公司",
+                                   status="evaluated_reject", score=6.0))
+        self.assertTrue(self.db.is_done(jid))    # 仍被去重拦截
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

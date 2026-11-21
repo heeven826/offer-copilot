@@ -41,9 +41,9 @@ class TestRates(unittest.TestCase):
 
 
 class TestDrift(unittest.TestCase):
-    def _rows(self, days_ago, score, n):
+    def _rows(self, days_ago, score, n, status="evaluated_pass"):
         d = (date.today() - timedelta(days=days_ago)).isoformat()
-        return [{"score": score, "created_at": d}] * n
+        return [{"score": score, "created_at": d, "status": status}] * n
 
     def test_drift_computed(self):
         rows = self._rows(1, 8, 12) + self._rows(8, 5, 12)   # 本周8 上周5
@@ -56,23 +56,35 @@ class TestDrift(unittest.TestCase):
         sd = score_drift(rows)
         self.assertFalse(sd["judgeable"])
         self.assertIsNone(sd["drift"])
-        self.assertIn("还差", sd["insufficient"])             # R14 note：明示差多少
+        self.assertIn("/10", sd["insufficient"])              # R14 note：明示差多少
 
     def test_zero_scores_excluded(self):
         """R14-1：score=0（未评分）不得混入均值——防'评分崩塌'假警报。"""
         rows = self._rows(1, 8, 12) + self._rows(8, 5, 12)
-        zeros = [{"score": 0, "created_at": (date.today() - timedelta(days=1)).isoformat()}] * 20
+        zeros = [{"score": 0, "created_at": (date.today() - timedelta(days=1)).isoformat(),
+                  "status": "greeted"}] * 20
         sd = score_drift(rows + zeros)
-        self.assertEqual(sd["this_week"]["samples"], 12)      # 0分被排除
+        self.assertEqual(sd["this_week"]["pass_n"], 12)       # 0分被排除
         self.assertEqual(sd["unscored_excluded"], 20)
         self.assertEqual(sd["drift"], 3.0)                    # 均值不被拉低
 
     def test_rejected_evals_counted(self):
         """R16-1：被拒样本（evaluated_reject）必须进漂移统计——防幸存者偏差。"""
-        rows = self._rows(1, 6, 10) + self._rows(8, 6, 10)    # 全部是6分被拒样本
+        rows = self._rows(1, 6, 10, status="evaluated_reject") + \
+               self._rows(8, 6, 10, status="evaluated_reject")
         sd = score_drift(rows)
-        self.assertEqual(sd["this_week"]["samples"], 10)      # 不因 reject 被排除
+        self.assertEqual(sd["this_week"]["reject_n"], 10)     # reject 组独立计数
+        self.assertEqual(sd["this_week"]["reject_avg"], 6.0)
         self.assertEqual(sd["drift"], 0.0)
+
+    def test_groups_split_reported(self):
+        """R17-2：pass/reject 分组各报均值——混合均值会混淆质量与策略变化。"""
+        rows = (self._rows(1, 8, 10) + self._rows(1, 5, 10, status="evaluated_reject") +
+                self._rows(8, 8, 10) + self._rows(8, 5, 10, status="evaluated_reject"))
+        sd = score_drift(rows)
+        self.assertEqual(sd["this_week"]["pass_avg"], 8.0)
+        self.assertEqual(sd["this_week"]["reject_avg"], 5.0)
+        self.assertEqual(sd["drift"], 0.0)   # 两组各自无漂移，混合值也不动
 
 
 class TestSummarize(unittest.TestCase):

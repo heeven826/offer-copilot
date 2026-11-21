@@ -425,15 +425,24 @@ def cmd_eval(args):
         out(error="--score 必填（0-10，允许小数）")
     job = Job(job_id=args.job_id, title=args.title or "", company=args.company or "")
     if args.title or args.company:
-        db.save_job(job)
+        db.save_job(job)            # INSERT OR IGNORE：不触碰已有 jobs.status（R17-1 安全边界）
     status = f"evaluated_{args.verdict}"
+    # R17-3 幂等：同职位覆盖旧评估（防重复计数绑架均值）
+    db.conn.execute(
+        "DELETE FROM applications WHERE job_id=? AND status LIKE 'evaluated_%'",
+        (args.job_id,))
+    db.conn.commit()
+    # R17-5：score 与 verdict 矛盾（人工否决是合法场景）显式标注
+    conflict = (args.verdict == "pass" and args.score < 7) or \
+               (args.verdict == "reject" and args.score >= 7)
     db.record(Application(args.job_id, args.title or "", args.company or "",
                           status=status, score=args.score,
-                          reason="agent精评" ))
-    db.audit("eval", target=args.job_id, outcome="ok",
-             score=args.score, verdict=args.verdict)
+                          reason="agent精评" + ("（人工否决）" if conflict else "")))
+    db.audit("eval", target=args.job_id, outcome=args.verdict,
+             score=args.score, verdict=args.verdict, verdict_conflict=conflict)
     out({"job_id": args.job_id, "score": args.score,
-         "verdict": args.verdict, "status": status})
+         "verdict": args.verdict, "status": status,
+         "verdict_conflict": conflict})
 
 
 def cmd_greet(args):

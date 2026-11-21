@@ -51,43 +51,58 @@ def truncate_rate(events: list, window: int = 30) -> dict:
 
 
 def score_drift(score_rows: list) -> dict:
-    """打分分布周漂移：本周 vs 上周平均分。
+    """打分分布周漂移：本周 vs 上周平均分（按 pass/reject 分组，R17-2）。
 
-    R14-1 修复：score<=0 视为"未评分"（agent 模式早期 greet 不传分，落库默认 0），
-    统计只认 score>0 的行，未评分数单独报（unscored），不混入均值——
-    否则样本到量会被拉到接近 0，误报"评分崩塌"。
+    - R14-1：score<=0 视为"未评分"，排除出均值（unscored 单列）
+    - R17-2：pass（greeted/evaluated_pass）与 reject（evaluated_reject）分组各报均值
+      ——混合均值会混淆"质量变化"与"投递策略变化"，分组合并诊断
+    - R17-5 语义：greeted 带分视作 pass 组（投了=通过）
     """
     today = date.today()
-    wk_start = today - timedelta(days=today.weekday())      # 本周一
+    wk_start = today - timedelta(days=today.weekday())
     last_start = wk_start - timedelta(days=7)
 
     valid = [r for r in score_rows if (r.get("score") or 0) > 0]
     unscored = len(score_rows) - len(valid)
+    for r in valid:
+        r["group"] = "reject" if r.get("status") == "evaluated_reject" else "pass"
 
     def _avg(rows):
         scores = [r["score"] for r in rows]
         return (round(sum(scores) / len(scores), 2), len(scores)) if scores else (None, 0)
 
-    this_rows = [r for r in valid if r["created_at"][:10] >= str(wk_start)]
-    last_rows = [r for r in valid
-                 if str(last_start) <= r["created_at"][:10] < str(wk_start)]
-    this_avg, this_n = _avg(this_rows)
-    last_avg, last_n = _avg(last_rows)
-    judgeable = bool(last_n >= 10 and this_n >= 10)
-    # 样本不足不判漂移（反噪声原则）+ 明示差多少（R14 note）
-    drift = (round(this_avg - last_avg, 2)
-             if judgeable and this_avg is not None and last_avg is not None else None)
+    def _week(rows, start, end=None):
+        if end is None:
+            return [r for r in rows if r["created_at"][:10] >= str(start)]
+        return [r for r in rows
+                if str(start) <= r["created_at"][:10] < str(end)]
+
+    result = {"unscored_excluded": unscored}
+    for label, start, end in (("this_week", wk_start, None),
+                              ("last_week", last_start, wk_start)):
+        wk = _week(valid, start, end)
+        p_avg, p_n = _avg([r for r in wk if r["group"] == "pass"])
+        r_avg, r_n = _avg([r for r in wk if r["group"] == "reject"])
+        result[label] = {"pass_avg": p_avg, "pass_n": p_n,
+                         "reject_avg": r_avg, "reject_n": r_n}
+
+    tn = result["this_week"]["pass_n"] + result["this_week"]["reject_n"]
+    ln = result["last_week"]["pass_n"] + result["last_week"]["reject_n"]
+    judgeable = bool(tn >= 10 and ln >= 10)
+    drift = None
+    if judgeable:
+        def _combined(wk):
+            s = [r["score"] for r in wk]
+            return round(sum(s) / len(s), 2) if s else None
+        this_c = _combined(_week(valid, wk_start))
+        last_c = _combined(_week(valid, last_start, wk_start))
+        if this_c is not None and last_c is not None:
+            drift = round(this_c - last_c, 2)
     insufficient = None
     if not judgeable:
-        need = max(0, 10 - this_n)
-        need_last = max(0, 10 - last_n)
-        insufficient = f"本周还差{need}个有效样本，上周还差{need_last}个（各需10）"
-    return {"this_week": {"avg": this_avg, "samples": this_n},
-            "last_week": {"avg": last_avg, "samples": last_n},
-            "unscored_excluded": unscored,
-            "drift": drift,
-            "judgeable": judgeable,
-            "insufficient": insufficient}
+        insufficient = f"本周{tn}/10，上周{ln}/10 有效样本"
+    result.update({"drift": drift, "judgeable": judgeable, "insufficient": insufficient})
+    return result
 
 
 def summarize(db, cfg: dict) -> dict:
@@ -141,15 +156,17 @@ def summarize(db, cfg: dict) -> dict:
         warnings.append({"code": "MSG_TRUNCATE_HIGH",
                          "hint": f"话术超长截断率 {tr['value']:.0%} > {tr_line:.0%}——提示词长度约束在失效"})
 
-    # ---- 哨兵 3：打分周漂移（攒基线为主；R14-1：只统计 score>0） ----
+    # ---- 哨兵 3：打分周漂移（攒基线为主；R14-1：只统计 score>0；R17-2：pass/reject分组） ----
     score_rows = [dict(r) for r in db.conn.execute(
-        "SELECT score, created_at FROM applications")]
+        "SELECT score, status, created_at FROM applications")]
     sd = score_drift(score_rows)
-    if sd["judgeable"] and abs(sd["drift"]) >= 1.5:
+    if sd["judgeable"] and sd["drift"] is not None and abs(sd["drift"]) >= 1.5:
+        tw, lw = sd["this_week"], sd["last_week"]
         warnings.append({"code": "SCORE_DRIFT",
                          "hint": f"打分均值周漂移 {sd['drift']:+.1f}"
-                                 f"（上周{sd['last_week']['avg']}→本周{sd['this_week']['avg']}）——"
-                                 "池子质量或解析质量在静默变化"})
+                                 f"（pass: {lw['pass_avg']}→{tw['pass_avg']} n={tw['pass_n']}; "
+                                 f"reject: {lw['reject_avg']}→{tw['reject_avg']} n={tw['reject_n']}）——"
+                                 "两组同向=质量真变化；仅混合值动=投递策略变化"})
 
     return {
         "status": "warning" if warnings else "healthy",
