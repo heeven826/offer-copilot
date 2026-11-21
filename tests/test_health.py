@@ -67,6 +67,13 @@ class TestDrift(unittest.TestCase):
         self.assertEqual(sd["unscored_excluded"], 20)
         self.assertEqual(sd["drift"], 3.0)                    # 均值不被拉低
 
+    def test_rejected_evals_counted(self):
+        """R16-1：被拒样本（evaluated_reject）必须进漂移统计——防幸存者偏差。"""
+        rows = self._rows(1, 6, 10) + self._rows(8, 6, 10)    # 全部是6分被拒样本
+        sd = score_drift(rows)
+        self.assertEqual(sd["this_week"]["samples"], 10)      # 不因 reject 被排除
+        self.assertEqual(sd["drift"], 0.0)
+
 
 class TestSummarize(unittest.TestCase):
     def setUp(self):

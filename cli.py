@@ -411,6 +411,31 @@ def cmd_detail(args):
          "link": f"https://www.zhipin.com/job_detail/{args.job_id}.html"})
 
 
+def cmd_eval(args):
+    """R16-1：精评结果独立落库（不依赖 greet）——消除哨兵的幸存者偏差。
+
+    每次精评后无论 pass/reject 都应记录；score=6 档的 reject 流量
+    是 REQ-05 复审闸门的数据源。
+    """
+    cfg = load_cfg()
+    db = open_db(args)
+    if args.verdict not in ("pass", "reject"):
+        out(error="verdict 只能是 pass 或 reject")
+    if args.score is None or not (0 <= args.score <= 10):
+        out(error="--score 必填（0-10，允许小数）")
+    job = Job(job_id=args.job_id, title=args.title or "", company=args.company or "")
+    if args.title or args.company:
+        db.save_job(job)
+    status = f"evaluated_{args.verdict}"
+    db.record(Application(args.job_id, args.title or "", args.company or "",
+                          status=status, score=args.score,
+                          reason="agent精评" ))
+    db.audit("eval", target=args.job_id, outcome="ok",
+             score=args.score, verdict=args.verdict)
+    out({"job_id": args.job_id, "score": args.score,
+         "verdict": args.verdict, "status": status})
+
+
 def cmd_greet(args):
     cfg = load_cfg()
     db = open_db(args)
@@ -422,8 +447,9 @@ def cmd_greet(args):
         out(error="msg_required（--msg 或 --msg-file）")
     if len(msg) > 300:
         out(error=f"msg_too_long({len(msg)}>300)")
-    if not getattr(args, "score", 0):
-        print("[warn] 未提供 --score：打分哨兵/复审闸门将无数据（R15-1）", file=sys.stderr)
+    if getattr(args, "score", None) is None:
+        print("[warn] 未提供 --score：打分哨兵/复审闸门将无数据（R15-1）。"
+              "不阻断、退出码不变", file=sys.stderr)
     cap = DailyCap(rate.get("daily_greet_limit", 40), db)
     if not cap.allow():
         out(error=f"daily_cap_reached({cap.limit})")
@@ -444,7 +470,8 @@ def cmd_greet(args):
         out(error=f"greet_failed[{res.get('stage')}]: {res.get('note', '')}")
     db.mark_job(args.job_id, "greeted")    # upsert：jobs 行不存在也能写入（P0-1 修复）
     db.record(Application(args.job_id, args.title or "", "",
-                          status="greeted", score=args.score, greeting=msg))
+                          status="greeted", score=args.score if args.score is not None else 0,
+                          greeting=msg))
     out({"job_id": args.job_id, "sent": True, "verified": res.get("verified"),
          "sent_text": msg[:60], "stage": res.get("stage"), "score": args.score,
          "today_greeted_by_tool": cap.used()})
@@ -628,6 +655,12 @@ def main():
 
     sub.add_parser("doctor", help="环境自检：登录/期望标签/关键选择器逐项体检")
     sub.add_parser("health", help="账号健康：今日操作回看+预警线+质量哨兵（REQ-10）")
+    e = sub.add_parser("eval", help="精评结果落库（R16-1：独立于greet，含被拒样本）")
+    e.add_argument("job_id")
+    e.add_argument("--score", type=float, required=True)
+    e.add_argument("--verdict", required=True, choices=["pass", "reject"])
+    e.add_argument("--title", default="")
+    e.add_argument("--company", default="")
     sub.add_parser("status", help="登录态/期望职位/配额/配置/目标一致性")
     sub.add_parser("jobs", help="当前期望页职位列表（含硬过滤与去重标注）")
     d = sub.add_parser("detail", help="打开职位详情抓JD（含30-40s节奏）")
@@ -641,7 +674,7 @@ def main():
                    help="从文件读取话术（规避 argv 编码/引号问题，UTF-8）")
     g.add_argument("--title", default="")
     g.add_argument("--company", default="")
-    g.add_argument("--score", type=float, default=0.0,
+    g.add_argument("--score", type=float, default=None,
                    help="agent 模式传入自己的加权评分（0-10，允许小数）——喂 REQ-10 周漂移与 REQ-05 闸门")
     i = sub.add_parser("inbox", help="读取未读会话与消息（只读）")
     i.add_argument("--max", type=int, default=5)
@@ -688,6 +721,7 @@ def main():
         _OUT_FILE = str(Path(_OUT_FILE).absolute())
 
     {"doctor": cmd_doctor, "health": cmd_health, "status": cmd_status, "jobs": cmd_jobs,
+     "eval": cmd_eval,
      "detail": cmd_detail, "greet": cmd_greet, "inbox": cmd_inbox,
      "reply": cmd_reply, "resume": cmd_resume, "archive": cmd_archive,
      "setup": cmd_setup, "star": cmd_star, "run": cmd_run}[args.cmd](args)
