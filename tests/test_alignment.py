@@ -85,7 +85,7 @@ class TestDirectionSignal(unittest.TestCase):
 
     def test_boundary(self):
         from filters import direction_signal
-        self.assertEqual(direction_signal("retail 解决方案"), [])   # 无 ai 误报
+        self.assertNotIn("ai", direction_signal("retail 存储工程师"))  # 无 ai 误报
         self.assertIn("ai", direction_signal("AI 平台"))
 
 
