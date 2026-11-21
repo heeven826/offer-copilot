@@ -55,7 +55,8 @@ from boss_browser.actions import Communicator, SELECTORS as ACT_SELECTORS
 from boss_browser.browser import BossBrowser
 from boss_browser.expect_page import ExpectNavigator
 from boss_browser.inbox import InboxProcessor
-from filters import hard_filter, parse_salary, effective_monthly, compute_alignment
+from filters import (hard_filter, parse_salary, effective_monthly,
+                     compute_alignment, direction_signal)
 from safety import DailyCap
 from storage.db import Database
 from storage.models import Application, Job
@@ -340,11 +341,16 @@ def cmd_jobs(args):
                 link=f"https://www.zhipin.com/job_detail/{raw.get('encryptJobId','')}.html")
         db.save_job(j)          # 全量落库（archive/去重依赖；status 默认 seen，不覆盖已有终态）
         ok, why = hard_filter(j, cfg)
+        sig = direction_signal(" ".join(filter(None, [
+            raw.get("jobName", ""), " ".join(raw.get("skills") or []),
+            " ".join(raw.get("jobLabels") or [])])))
         data.append({
             "job_id": raw.get("encryptJobId", ""),
             "title": raw.get("jobName", ""),
             "salary": raw.get("salaryDesc", ""),
             "effective_monthly_k": round(eff, 1) if eff else None,
+            "direction_keywords": sig,
+            "no_direction_signal": not sig,   # true=无方向证据（区别于方向不符，R7 OBS-3）
             "company": raw.get("brandName", ""),
             "company_info": " · ".join(filter(None, [
                 raw.get("brandScaleName"), raw.get("brandStageName"),

@@ -21,6 +21,25 @@ STOPWORDS = {"技术", "工程师", "程师", "总监", "负责人", "专家", "
              "合伙人", "开发", "高级", "资深", "实习", "chief", "staff"}
 
 
+def direction_signal(text: str) -> list:
+    """文本中命中的方向关键词（大小写与边界规则同 compute_alignment）。
+
+    用途：jobs 输出分层——空列表 = "无方向信号"（纯硬件/工艺/通用后端等），
+    与"有方向词但与画像不符"区分开，供 agent 区别对待（R7 OBS-3）。
+    """
+    if not text:
+        return []
+    hits = []
+    for kw in DIRECTION_KEYWORDS:
+        if kw.isascii():
+            if re.search(rf"(?<![a-zA-Z0-9]){re.escape(kw)}(?![a-zA-Z0-9])",
+                         text, re.IGNORECASE):
+                hits.append(kw)
+        elif kw in text:
+            hits.append(kw)
+    return hits
+
+
 def compute_alignment(expect_tabs: list, target_roles: list) -> dict:
     """平台期望标签 vs 画像目标方向的粗略一致性结论。
 

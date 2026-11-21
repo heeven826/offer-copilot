@@ -70,5 +70,24 @@ class TestAlignment(unittest.TestCase):
         self.assertFalse(set(DIRECTION_KEYWORDS) & STOPWORDS)
 
 
+class TestDirectionSignal(unittest.TestCase):
+    """R7 OBS-3：区分"无方向信号"与"方向不符"。"""
+
+    def test_hit(self):
+        from filters import direction_signal
+        self.assertIn("大模型", direction_signal("多模态大模型算法工程师"))
+        self.assertTrue(direction_signal("AI Agent 平台开发"))
+
+    def test_no_signal(self):
+        from filters import direction_signal
+        self.assertEqual(direction_signal("工艺流程模拟领域技术专家"), [])
+        self.assertEqual(direction_signal(""), [])
+
+    def test_boundary(self):
+        from filters import direction_signal
+        self.assertEqual(direction_signal("retail 解决方案"), [])   # 无 ai 误报
+        self.assertIn("ai", direction_signal("AI 平台"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
