@@ -7,6 +7,52 @@
 """
 import re
 
+# ============ 期望标签 vs 目标方向 的一致性判断 ============
+# 方向关键词（小写子串匹配）：只有这些才算"方向证据"
+DIRECTION_KEYWORDS = [
+    "ai", "人工智能", "大模型", "llm", "agent", "智能体", "rag", "算法",
+    "机器学习", "深度学习", "nlp", "计算机视觉", "语音", "推荐", "搜索",
+    "广告", "数据", "平台", "云", "infra", "后端", "前端", "全栈",
+    "移动端", "测试", "运维", "安全", "嵌入式", "硬件", "爬虫",
+    "fde", "交付", "解决方案", "售前", "产品", "游戏", "电商",
+]
+# 通用职称/级别词：禁止作为方向证据（"程师""总监"这类片段命中=随机匹配）
+STOPWORDS = {"技术", "工程师", "程师", "总监", "负责人", "专家", "经理",
+             "合伙人", "开发", "高级", "资深", "实习", "chief", "staff"}
+
+
+def compute_alignment(expect_tabs: list, target_roles: list) -> dict:
+    """平台期望标签 vs 画像目标方向的粗略一致性结论。
+
+    只认方向关键词交集（大小写不敏感），通用职称不计入——
+    防止 "AI 交付工程师"[-2:]="程师" 命中 "全栈工程师" 这类假阳性。
+    - aligned=True/False 有关键词交集与否
+    - aligned=None       任一侧缺失，无法判断（不要默认 True）
+    仅供快速拦截明显错配；最终由 agent 语义复核（evidence 给出命中三元组）。
+    """
+    tabs = [t for t in (expect_tabs or []) if t]
+    roles = [r for r in (target_roles or []) if r]
+    if not tabs or not roles:
+        return {"aligned": None, "overlap": [], "evidence": [], "suggestion": "",
+                "note": "unknown: 缺少 target_roles 或 expect_tabs，无法判断，请先补全"}
+
+    overlap, evidence = [], []
+    for kw in DIRECTION_KEYWORDS:
+        if kw in STOPWORDS:
+            continue
+        hit_roles = [r for r in roles if kw in r.lower()]
+        hit_tabs = [t for t in tabs if kw in t.lower()]
+        if hit_roles and hit_tabs:
+            overlap.append(kw)
+            evidence.append({"token": kw, "roles": hit_roles, "tabs": hit_tabs})
+
+    aligned = bool(overlap)
+    suggestion = ("存在方向词交集，仍建议语义复核具体方向是否一致" if aligned else
+                  "平台期望标签与 target_roles 无方向词交集，大概率在不匹配的池子里空转；"
+                  "请语义复核后让用户改 Boss「期望管理」或 profile.yaml，改完再跑")
+    return {"aligned": aligned, "overlap": overlap, "evidence": evidence,
+            "suggestion": suggestion}
+
 
 def parse_salary(salary: str):
     """解析薪资字符串 → (月薪下限k, 月数)。解析不了返回 (None, None)。

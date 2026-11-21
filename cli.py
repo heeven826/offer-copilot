@@ -55,7 +55,7 @@ from boss_browser.actions import Communicator, SELECTORS as ACT_SELECTORS
 from boss_browser.browser import BossBrowser
 from boss_browser.expect_page import ExpectNavigator
 from boss_browser.inbox import InboxProcessor
-from filters import hard_filter, parse_salary, effective_monthly
+from filters import hard_filter, parse_salary, effective_monthly, compute_alignment
 from safety import DailyCap
 from storage.db import Database
 from storage.models import Application, Job
@@ -63,19 +63,28 @@ from storage.models import Application, Job
 _OUT_FILE = None
 
 
-def out(data=None, error=None):
-    """统一 JSON 输出后退出；--out 时同步写 UTF-8 文件。"""
+def out(data=None, error=None, code=None):
+    """统一 JSON 输出后退出；--out 时同步写 UTF-8 文件。code 可显式指定。"""
     if error is not None:
         payload = {"ok": False, "error": error}
-        code = 1
+        code = 1 if code is None else code
     else:
         payload = {"ok": True, "data": data}
-        code = 0
+        code = 0 if code is None else code
     text = json.dumps(payload, ensure_ascii=False, indent=1)
     print(text)
     if _OUT_FILE:
         Path(_OUT_FILE).write_text(text, encoding="utf-8")
     sys.exit(code)
+
+
+def chrome_help_error(e, cfg) -> str:
+    """Chrome 连不上的人话报错（端口取配置，不硬编码）。"""
+    port = (cfg.get("browser") or {}).get("debug_port", 9222)
+    return ("chrome_not_running：Chrome 未运行且无法自动拉起。请手动启动：\n"
+            f"  chrome --remote-debugging-port={port} --user-data-dir=./chrome_profile\n"
+            "（然后重跑本命令，CLI 会自动接管已有实例）\n"
+            f"原始错误: {type(e).__name__}: {str(e)[:120]}")
 
 
 def load_cfg():
@@ -114,10 +123,7 @@ def connect(cfg, db):
     try:
         tab = b.connect()
     except Exception as e:
-        out(error="chrome_not_running：Chrome 未运行且无法自动拉起。请手动启动：\n"
-                  "  chrome --remote-debugging-port=9222 --user-data-dir=./chrome_profile\n"
-                  "（然后重跑本命令，CLI 会自动接管已有实例）\n"
-                  f"原始错误: {type(e).__name__}: {str(e)[:100]}")
+        out(error=chrome_help_error(e, cfg))
     if not b.ensure_login(timeout=120):
         out(error="not_logged_in（请运行 setup 扫码登录）")
     return tab
@@ -159,8 +165,11 @@ def cmd_doctor(args):
         tab = b.connect()
         add("chrome_connect", True, hint=str(tab.url)[:60])
     except Exception as e:
-        add("chrome_connect", False, hint=str(e)[:80])
-        out({"checks": checks})   # 连不上后面都没法测
+        add("chrome_connect", False, "127.0.0.1:调试端口", hint=chrome_help_error(e, cfg))
+        # 早退也要有 summary/ready，且失败退出码为 1（agent 判断看 ready 与 exit code）
+        out({"checks": checks,
+             "summary": f"1/1 项检查失败：Chrome 未连接，后续检查跳过",
+             "ready": False}, code=1)
 
     # 2. 登录态
     login = b.ensure_login(timeout=60)
@@ -213,8 +222,11 @@ def cmd_doctor(args):
     en.close()
 
     n_ok = sum(1 for c in checks if c["ok"])
+    ready = n_ok == len(checks)
     out({"checks": checks, "summary": f"{n_ok}/{len(checks)} 项通过",
-         "hint": "全部通过即可正常使用；选择器类失败 = 站点改版，需要更新 SELECTORS"})
+         "ready": ready,
+         "hint": "判断自检是否通过看 ready 字段与退出码（0=通过）；"
+                 "选择器类失败 = 站点改版，需要更新 SELECTORS"}, code=0 if ready else 1)
 
 
 def cmd_status(args):
@@ -230,26 +242,13 @@ def cmd_status(args):
     profile = profile_of()
     roles = target_roles_of(profile)
     tab_names = [(t.text or "").split("\n")[0] for t in tabs]
-    # 粗略字面重叠结论（agent 仍应语义复核）：任一 target 关键词出现在期望标签里即算有交集
-    overlap = []
-    for role in roles:
-        for name in tab_names:
-            for kw in (role, role[:2], role[-2:]):
-                if len(kw) >= 2 and kw in name:
-                    overlap.append(kw)
-                    break
-    aligned = bool(overlap) if roles and tab_names else True
+    # 方向词交集结论（compute_alignment：只认方向关键词，通用职称/2字片段不算）
+    alignment = compute_alignment(tab_names, roles)
     out({
         "login": True,
         "expect_tabs": tab_names,
         "target_roles": roles,
-        "alignment": {
-            "aligned": aligned,
-            "overlap": sorted(set(overlap)),
-            "suggestion": ("" if aligned else
-                           "平台期望标签与 target_roles 无字面交集，大概率在不匹配的池子里空转；"
-                           "请语义复核后让用户改 Boss「期望管理」或 profile.yaml，改完再跑"),
-        },
+        "alignment": alignment,
         "today_greeted_by_tool": cap.used(),
         "daily_limit": cap.limit,
         "note": "today_greeted_by_tool 仅统计本工具发送的；平台侧（App/网页手动发送）不在此计数",
@@ -317,13 +316,11 @@ def cmd_detail(args):
     db = open_db(args)
     tab = connect(cfg, db)
     comm = Communicator(tab, cfg, db)
-    job = Job(job_id=args.job_id, title=args.title or "")
+    job = Job(job_id=args.job_id, title=args.title or "", company=args.company or "")
     jd = comm.open_detail(job)      # 内部自带 30-40s 跨进程节奏
     if jd is False:
         out(error="job_id_invalid")
-    if args.title:
-        job.title = args.title      # title 一并落库（archive 可见）
-    db.save_job(job)                # 先确保 jobs 行存在（upsert 语义）
+    db.save_job(job)                # 先确保 jobs 行存在（title/company 落库，archive 可检索）
     if jd:                          # JD 回写档案库（沉淀）
         job.job_desc = jd
         db.update_job_desc(job)
@@ -351,10 +348,9 @@ def cmd_greet(args):
 
     tab = connect(cfg, db)
     comm = Communicator(tab, cfg, db)
-    job = Job(job_id=args.job_id, title=args.title or "")
-    if args.title:
-        job.title = args.title
-        db.save_job(job)            # title 落库
+    job = Job(job_id=args.job_id, title=args.title or "", company=args.company or "")
+    if args.title or args.company:
+        db.save_job(job)            # title/company 落库（archive 检索依赖）
     res = comm.greet(msg, job=job)         # 内部含详情节奏/风控/拟人操作/发送验证
     if not res.get("ok"):
         db.mark_job(args.job_id, "failed")
@@ -534,12 +530,14 @@ def main():
     d = sub.add_parser("detail", help="打开职位详情抓JD（含30-40s节奏）")
     d.add_argument("job_id")
     d.add_argument("--title", default="")
+    d.add_argument("--company", default="", help="公司名（落库供 archive 检索）")
     g = sub.add_parser("greet", help="发送打招呼（护栏：节奏/日上限/去重/长度）")
     g.add_argument("job_id")
     g.add_argument("--msg", default="")
     g.add_argument("--msg-file", dest="msg_file", default="",
                    help="从文件读取话术（规避 argv 编码/引号问题，UTF-8）")
     g.add_argument("--title", default="")
+    g.add_argument("--company", default="")
     i = sub.add_parser("inbox", help="读取未读会话与消息（只读）")
     i.add_argument("--max", type=int, default=5)
     i.add_argument("--all", action="store_true", help="全量会话存量视图（含最后消息，不打开会话）")
