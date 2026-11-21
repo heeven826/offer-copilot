@@ -8,6 +8,22 @@
 
 > ⚠️ **免责声明**：本工具为个人求职效率辅助，通过用户本人浏览器与账号操作。自动化行为可能违反平台用户协议，存在账号被限制的风险，由使用者自行承担。默认节奏配置已很保守（消息间隔 ≥60s、每日上限 40），请勿调到激进值。
 
+## 🚀 一句话启动
+
+把下面这句**复制给你的 AI Agent**（DeepSeek Harness / Claude Code / WorkBuddy / Codex / Cursor 等任何能执行 shell 的助手），它会自动安装技能、引导配置并开始投递：
+
+**中文：**
+```
+帮我安装并启动 offer-copilot 求职助手：先运行 npx -y skills add heeven826/offer-copilot 安装技能，然后严格按技能说明（skill/offer-copilot/SKILL.md，若本会话未识别新技能就直接读仓库里的这个文件）完成环境自检与配置，最后问我今天想投递几个职位，再按技能里的流程开始。
+```
+
+**English:**
+```
+Install and start offer-copilot (a job-hunting assistant): first run `npx -y skills add heeven826/offer-copilot`, then follow the skill instructions strictly (skill/offer-copilot/SKILL.md — if the new skill isn't loaded in this session, read that file from the repo directly) to set up the environment, then ask me how many jobs to apply today before starting.
+```
+
+为什么这句话有效：agent 会自己装技能 → 技能里有完整的安装引导、打分标准、话术规则和护栏说明 → 真实消息发送前一定会来找你确认。
+
 ## 安装
 
 ```bash
