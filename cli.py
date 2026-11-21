@@ -56,7 +56,7 @@ from boss_browser.browser import BossBrowser
 from boss_browser.expect_page import ExpectNavigator
 from boss_browser.inbox import InboxProcessor
 from filters import (hard_filter, parse_salary, effective_monthly,
-                     compute_alignment, direction_signal)
+                     compute_alignment, direction_signal, direction_match)
 from safety import DailyCap
 from storage.db import Database
 from storage.models import Application, Job
@@ -323,6 +323,7 @@ def cmd_jobs(args):
     jobs, page, has_more = en.capture_jobs()
     en.close()
     data = []
+    roles = target_roles_of(profile_of())   # 画像目标方向（direction_match 用）
     for raw in jobs:
         lo, months = parse_salary(raw.get("salaryDesc") or "")
         eff = effective_monthly(lo, months) if lo else None
@@ -344,12 +345,14 @@ def cmd_jobs(args):
         sig = direction_signal(" ".join(filter(None, [
             raw.get("jobName", ""), " ".join(raw.get("skills") or []),
             " ".join(raw.get("jobLabels") or [])])))
+        dmatch = direction_match(sig, roles)
         data.append({
             "job_id": raw.get("encryptJobId", ""),
             "title": raw.get("jobName", ""),
             "salary": raw.get("salaryDesc", ""),
             "effective_monthly_k": round(eff, 1) if eff else None,
             "direction_keywords": sig,
+            "direction_match": dmatch,   # 与画像目标的交集（R8-2 三态判断）
             "no_direction_signal": not sig,   # true=无方向证据（区别于方向不符，R7 OBS-3）
             "company": raw.get("brandName", ""),
             "company_info": " · ".join(filter(None, [

@@ -88,6 +88,25 @@ class TestDirectionSignal(unittest.TestCase):
         self.assertNotIn("ai", direction_signal("retail 存储工程师"))  # 无 ai 误报
         self.assertIn("ai", direction_signal("AI 平台"))
 
+    def test_compound_words(self):
+        """R8-1：AIoT/AIGC/AIOps 等连写复合词不得被边界规则拦掉。"""
+        from filters import direction_signal
+        sig = direction_signal("【AIoT、家电】技术总监/CTO/总架构师")
+        self.assertIn("ai", sig)
+        self.assertIn("ai", direction_signal("AIGC 内容生成专家"))
+        self.assertIn("ai", direction_signal("AIOps 平台负责人"))
+        self.assertIn("rag", direction_signal("RagFlow 工程师"))
+        # trainee/email 类仍不得误报
+        self.assertNotIn("ai", direction_signal("trainee program"))
+
+    def test_direction_match(self):
+        """R8-2：信号关键词与画像目标的交集（三态判断）。"""
+        from filters import direction_match
+        self.assertEqual(direction_match(["ai", "平台"], ["AI 技术总监"]), ["ai"])
+        self.assertEqual(direction_match(["硬件"], ["AI 技术总监", "大模型应用"]), [])   # 负向
+        self.assertEqual(direction_match([], ["AI 技术总监"]), [])                     # 无信号
+        self.assertEqual(direction_match(["大模型"], ["AI 技术总监", "大模型应用"]), ["大模型"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

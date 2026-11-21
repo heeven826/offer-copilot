@@ -21,15 +21,29 @@ STOPWORDS = {"技术", "工程师", "程师", "总监", "负责人", "专家", "
              "合伙人", "开发", "高级", "资深", "实习", "chief", "staff"}
 
 
+# 连写复合词归一化表（R8-1）：AIoT/AIGC/AIOps 这类会被硬边界规则拦掉，
+# 匹配前按整词识别并注入其方向关键词。白名单可枚举、可控。
+COMPOUND_WORDS = {
+    "aiot": "ai", "aiops": "ai", "aigc": "ai", "aiagent": "ai agent",
+    "ainative": "ai", "genai": "ai", "aidata": "ai", "aicoding": "ai",
+    "llmops": "llm", "ragflow": "rag", "ragchain": "rag",
+}
+
+
 def direction_signal(text: str) -> list:
     """文本中命中的方向关键词（大小写与边界规则同 compute_alignment）。
 
     用途：jobs 输出分层——空列表 = "无方向信号"（纯硬件/工艺/通用后端等），
     与"有方向词但与画像不符"区分开，供 agent 区别对待（R7 OBS-3）。
+    连写复合词（AIoT/AIGC等）先经归一化表注入关键词（R8-1）。
     """
     if not text:
         return []
     hits = []
+    tl = text.lower()
+    for compound, kws in COMPOUND_WORDS.items():
+        if re.search(rf"(?<![a-zA-Z0-9]){compound}(?![a-zA-Z0-9])", tl):
+            hits.extend(kws.split())
     for kw in DIRECTION_KEYWORDS:
         if kw.isascii():
             if re.search(rf"(?<![a-zA-Z0-9]){re.escape(kw)}(?![a-zA-Z0-9])",
@@ -37,7 +51,27 @@ def direction_signal(text: str) -> list:
                 hits.append(kw)
         elif kw in text:
             hits.append(kw)
-    return hits
+    return list(dict.fromkeys(hits))   # 去重保序
+
+
+def direction_match(keywords: list, target_roles: list) -> list:
+    """信号关键词与画像目标方向的交集（R8-2 三态判断用）。
+
+    agent 判读：match 非空=正向；keywords 非空但 match 空=负向或无关；
+    keywords 空=无方向证据（no_direction_signal）。
+    """
+    if not keywords or not target_roles:
+        return []
+    role_text = " ".join(str(r) for r in target_roles)
+    rl = role_text.lower()
+    matched = []
+    for kw in keywords:
+        if kw.isascii():
+            if re.search(rf"(?<![a-zA-Z0-9]){re.escape(kw)}(?![a-zA-Z0-9])", rl):
+                matched.append(kw)
+        elif kw in role_text:
+            matched.append(kw)
+    return matched
 
 
 def compute_alignment(expect_tabs: list, target_roles: list) -> dict:
