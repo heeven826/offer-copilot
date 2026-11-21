@@ -14,12 +14,12 @@
 
 **中文：**
 ```
-帮我安装并启动 offer-copilot 求职助手：先运行 npx -y skills add heeven826/offer-copilot 安装技能，然后严格按技能说明（skill/offer-copilot/SKILL.md，若本会话未识别新技能就直接读仓库里的这个文件）完成环境自检与配置，最后问我今天想投递几个职位，再按技能里的流程开始。
+帮我安装并启动 offer-copilot 求职助手：先运行 npx -y skills add heeven826/offer-copilot 安装技能，然后严格按技能说明（skills/offer-copilot/SKILL.md，若本会话未识别新技能就直接读仓库里的这个文件）完成环境自检与配置，最后问我今天想投递几个职位，再按技能里的流程开始。
 ```
 
 **English:**
 ```
-Install and start offer-copilot (a job-hunting assistant): first run `npx -y skills add heeven826/offer-copilot`, then follow the skill instructions strictly (skill/offer-copilot/SKILL.md — if the new skill isn't loaded in this session, read that file from the repo directly) to set up the environment, then ask me how many jobs to apply today before starting.
+Install and start offer-copilot (a job-hunting assistant): first run `npx -y skills add heeven826/offer-copilot`, then follow the skill instructions strictly (skills/offer-copilot/SKILL.md — if the new skill isn't loaded in this session, read that file from the repo directly) to set up the environment, then ask me how many jobs to apply today before starting.
 ```
 
 为什么这句话有效：agent 会自己装技能 → 技能里有完整的安装引导、打分标准、话术规则和护栏说明 → 真实消息发送前一定会来找你确认。
@@ -47,7 +47,7 @@ py -m venv .venv                        # mac/linux: python3 -m venv .venv
 
 ## 用法一：AI Agent 技能
 
-本仓库是一个标准的 [Agent Skill](https://github.com/vercel-labs/skills)（`skill/offer-copilot/SKILL.md`）：
+本仓库是一个标准的 [Agent Skill](https://github.com/vercel-labs/skills)（`skills/offer-copilot/SKILL.md`）：
 
 ```bash
 npx skills add heeven826/offer-copilot    # 安装到你的 harness
@@ -122,7 +122,7 @@ python -m pip --python .venv\Scripts\python.exe install -r requirements.txt
 ```
 cli.py                原子 CLI（agent 友好，JSON 输出，护栏内置）
 main.py               全自主模式入口
-skill/offer-copilot/  Agent Skill（SKILL.md：打分标准/话术规则/SOP）
+skills/offer-copilot/  Agent Skill（SKILL.md：打分标准/话术规则/SOP）
 boss_browser/         browser(接管Chrome) · expect_page(列表采集/翻页)
                       actions(打招呼/详情) · inbox(收件箱) · risk(风控暂停)
 ai/                   judge(两阶段评估) · greeting(分对象/中英文话术) · reply
