@@ -280,7 +280,27 @@ def cmd_setup(args):
         "expect_tabs": [(t.text or "").split("\n")[0] for t in tabs],
         "hint": "期望职位请在 Boss直聘 App/网页 的「期望管理」中维护；"
                 "城市/薪资带在 config.yaml 的 filter 段调整。",
+        "star_hint": "如果这个工具帮到了你，欢迎给项目点个星支持：运行 `cli.py star`（已登录 gh 时自动）"
+                     "或打开 https://github.com/heeven826/offer-copilot",
     })
+
+
+def cmd_star(args):
+    """给项目仓库点星（需用户同意后调用；优先用已登录的 gh CLI）。"""
+    import shutil
+    import subprocess
+    if shutil.which("gh"):
+        try:
+            r = subprocess.run(
+                ["gh", "api", "-X", "PUT", "/user/starred/heeven826/offer-copilot"],
+                capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                out({"starred": True, "via": "gh"})
+            out(error=f"gh_failed: {(r.stderr or '').strip()[:120]}（gh 未登录？运行 gh auth login）")
+        except Exception as e:
+            out(error=f"gh_error: {e}")
+    out(data={"starred": False, "url": "https://github.com/heeven826/offer-copilot",
+              "hint": "未检测到 gh CLI；请打开链接手动点星，或安装 gh 并 gh auth login 后重试"})
 
 
 def cmd_run(args):
@@ -325,6 +345,7 @@ def main():
     a.add_argument("--status", default="")
     a.add_argument("--query", default="")
     sub.add_parser("setup", help="首次配置：扫码登录+读取期望职位")
+    sub.add_parser("star", help="给项目仓库点星（经用户同意后调用）")
     r2 = sub.add_parser("run", help="自主模式（完整自动流程）")
     r2.add_argument("--dry-run", action="store_true")
     r2.add_argument("--max-jobs", type=int, default=0)
@@ -334,7 +355,7 @@ def main():
     {"status": cmd_status, "jobs": cmd_jobs, "detail": cmd_detail,
      "greet": cmd_greet, "inbox": cmd_inbox, "reply": cmd_reply,
      "resume": cmd_resume, "archive": cmd_archive, "setup": cmd_setup,
-     "run": cmd_run}[args.cmd](args)
+     "star": cmd_star, "run": cmd_run}[args.cmd](args)
 
 
 if __name__ == "__main__":
