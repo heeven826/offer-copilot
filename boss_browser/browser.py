@@ -20,12 +20,28 @@ class BossBrowser:
     def __init__(self, cfg: dict, project_root: Path):
         b = cfg.get("browser", {})
         self.port = b.get("debug_port", 9222)
+        self.auto_launch = b.get("auto_launch", True)
         self.user_data_dir = (project_root / b.get("user_data_dir", "./chrome_profile")).resolve()
         self.browser = None
         self.tab = None
 
     def connect(self):
-        """连接/启动 Chrome，返回可用的 tab 对象。"""
+        """连接/启动 Chrome，返回可用的 tab 对象。
+
+        browser.auto_launch=false 时：调试端口未开则立即报错（不尝试拉起），
+        供受限桌面/沙箱环境避免 30 秒拉起超时；默认 true 保持冷启动能力。
+        """
+        import socket
+        if not self.auto_launch:
+            try:
+                with socket.create_connection(
+                        ("127.0.0.1", int(self.port)), timeout=0.5):
+                    pass   # 端口开，正常接管
+            except OSError:
+                raise RuntimeError(
+                    f"chrome_not_running：调试端口 {self.port} 未开且 auto_launch=false。"
+                    f"请手动启动：chrome --remote-debugging-port={self.port} "
+                    "--user-data-dir=./chrome_profile（然后重跑，CLI 会自动接管）")
         opts = ChromiumOptions()
         opts.set_local_port(self.port)
         opts.set_user_data_path(str(self.user_data_dir))
