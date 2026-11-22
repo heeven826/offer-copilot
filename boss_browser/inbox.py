@@ -122,18 +122,40 @@ class InboxProcessor:
         return msgs
 
     def _reply(self, text: str) -> bool:
-        """在当前会话输入并发送回复。"""
-        inp = self.tab.ele(SELECTORS["chat_input"], timeout=4)
+        """在当前会话输入并发送回复（B2：双选择器 + 长等待 + 等 disabled 解除）。"""
+        from .actions import SELECTORS as ACT_SEL
+
+        def first(selectors, timeout):
+            for s in selectors:
+                try:
+                    e = self.tab.ele(s, timeout=timeout)
+                except Exception:
+                    e = None
+                if e:
+                    return e
+            return None
+
+        inp = first(ACT_SEL["chat_inputs"], timeout=15)
         if not inp:
             logger.error("未找到聊天输入框")
             return False
-        self._jitter_click(inp, (-40, 40), (-3, 3))
+        try:
+            self._jitter_click(inp, (-40, 40), (-3, 3))
+        except Exception:
+            pass
         sleep_range(0.5, 1.2)
         inp.input(text)
         sleep_range(1.0, 2.5, "检查回复内容")
-        send = self.tab.ele(SELECTORS["chat_send"], timeout=3)
+        send = first(ACT_SEL["chat_sends"], timeout=5)
         if not send:
             logger.error("未找到发送按钮")
+            return False
+        for _ in range(8):   # 等输入注册、disabled 解除
+            if "disabled" not in (send.attr("class") or ""):
+                break
+            sleep_range(0.5, 1.0)
+        if "disabled" in (send.attr("class") or ""):
+            logger.error("发送按钮未激活（输入未注册）")
             return False
         self._jitter_click(send, (-15, 15), (-4, 4))
         sleep_range(1, 2)
@@ -202,7 +224,14 @@ class InboxProcessor:
         return result
 
     def find_and_open(self, name: str, brand: str = "") -> bool:
-        """按姓名+公司打开指定会话（供 CLI reply/resume 用）。"""
+        """按姓名+公司打开指定会话（供 CLI reply/resume 用）。
+
+        B3 修复：connect() 会把页面带到首页，会话列表不在 DOM——
+        这里无条件确保先在聊天页。
+        """
+        if "/web/geek/chat" not in (self.tab.url or ""):
+            self.tab.get(CHAT_URL)
+            sleep_range(2.5, 3.5, "等待聊天页加载")
         friend = {"name": name, "brandName": brand}
         item = self._find_conversation(friend)
         if not item:

@@ -230,7 +230,7 @@ class Communicator:
             check_risk(self.tab)
             # 注意：走到这里会话已建立 —— 之后的失败都会留下空会话（消息未发）
 
-            inp = self._first_ele(SELECTORS["chat_inputs"], timeout=6)
+            inp = self._first_ele(SELECTORS["chat_inputs"], timeout=15)   # B1：连续发送时渲染变慢，6s不足
             if not inp:
                 return fail("chat_input", "会话已建立但输入框未渲染（注意：空会话已产生，消息未发）")
             try:

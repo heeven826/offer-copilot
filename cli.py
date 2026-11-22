@@ -335,7 +335,22 @@ def cmd_jobs(args):
     tab = connect(cfg, db)
     en = ExpectNavigator(tab, cfg)
     en.open()
-    jobs, page, has_more = en.capture_jobs()
+    all_tabs = getattr(args, "all_tabs", False)
+    raws, page, has_more = en.capture_jobs()
+    if all_tabs:
+        # R20-ERRATUM：默认只抓当前标签第一页（约池子的1/6）——全标签枚举
+        n_tabs = len(en.expect_tabs())
+        for i in range(1, n_tabs):
+            en.click_tab_by_index(i)
+            more, _, hm = en.capture_jobs()
+            raws.extend(more)
+            has_more = has_more or hm
+        seen_ids = set()
+        raws = [r for r in raws
+                if not (r.get("encryptJobId") in seen_ids or seen_ids.add(r.get("encryptJobId")))]
+        scope = f"全部{n_tabs}个期望标签第1页（约{len(raws)}个）"
+    else:
+        scope = "仅当前期望标签第1页——池子还有其余标签与更多页，样本不完整（--all-tabs 可全标签）"
     en.close()
     data = []
     roles = target_roles_of(profile_of())   # 画像目标方向（direction_match 用）
@@ -370,6 +385,7 @@ def cmd_jobs(args):
             "title": raw.get("jobName", ""),
             "salary": raw.get("salaryDesc", ""),
             "effective_monthly_k": round(eff, 1) if eff else None,
+            "salary_months": months,                  # OBS-4：月数>16 时折算值语义失真，据此判读
             "direction_keywords": sig_title,          # 标题命中（高置信）
             "direction_keywords_tags": sig_tags,      # 平台标签命中（辅助，偏乐观）
             "direction_match": dmatch,   # 标题关键词与画像的交集（R8-2 三态判断的正向依据）
@@ -391,7 +407,8 @@ def cmd_jobs(args):
             "filter_reason": why,
             "processed": db.is_done(raw.get("encryptJobId", "")),
         })
-    out({"page": page, "has_more": has_more, "count": len(data), "jobs": data})
+    out({"page": page, "has_more": has_more, "scope": scope,
+         "count": len(data), "jobs": data})
 
 
 def cmd_detail(args):
@@ -423,21 +440,30 @@ def cmd_eval(args):
         out(error="verdict 只能是 pass 或 reject")
     if args.score is None or not (0 <= args.score <= 10):
         out(error="--score 必填（0-10，允许小数）")
+    if args.score == 0 and args.verdict == "pass":
+        out(error="score=0 + pass 语义不可能（多半漏传分），拒绝记录（R18-5）")
+    th = cfg.get("ai", {}).get("min_score", 7)     # R18-1：阈值取配置，不硬编码
     job = Job(job_id=args.job_id, title=args.title or "", company=args.company or "")
-    if args.title or args.company:
-        db.save_job(job)            # INSERT OR IGNORE：不触碰已有 jobs.status（R17-1 安全边界）
+    db.save_job(job)            # R18-4：无条件落库（archive 可见）；INSERT OR IGNORE 不触碰终态
     status = f"evaluated_{args.verdict}"
-    # R17-3 幂等：同职位覆盖旧评估（防重复计数绑架均值）
+    # R17-3/R18-2 幂等与历史平衡：只替换**本周**的同职位评估
+    # （跨周历史保留，周漂移基线不追溯性变化）
+    from datetime import date as _d, timedelta as _td
+    today = _d.today()
+    wk_start = (today - _td(days=today.weekday())).isoformat()
+    # R18-3：DELETE+INSERT 单事务（中途失败不丢历史）
+    conflict = (args.verdict == "pass" and args.score < th) or \
+               (args.verdict == "reject" and args.score >= th)
     db.conn.execute(
-        "DELETE FROM applications WHERE job_id=? AND status LIKE 'evaluated_%'",
-        (args.job_id,))
+        "DELETE FROM applications WHERE job_id=? AND status LIKE 'evaluated_%' "
+        "AND created_at >= ?", (args.job_id, wk_start))
+    db.conn.execute(
+        "INSERT INTO applications (job_id,title,company,status,score,reason,"
+        "greeting,created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (args.job_id, args.title or "", args.company or "", status, args.score,
+         "agent精评" + ("（人工否决）" if conflict else ""), "",
+         __import__("datetime").datetime.now().isoformat(timespec="seconds")))
     db.conn.commit()
-    # R17-5：score 与 verdict 矛盾（人工否决是合法场景）显式标注
-    conflict = (args.verdict == "pass" and args.score < 7) or \
-               (args.verdict == "reject" and args.score >= 7)
-    db.record(Application(args.job_id, args.title or "", args.company or "",
-                          status=status, score=args.score,
-                          reason="agent精评" + ("（人工否决）" if conflict else "")))
     db.audit("eval", target=args.job_id, outcome=args.verdict,
              score=args.score, verdict=args.verdict, verdict_conflict=conflict)
     out({"job_id": args.job_id, "score": args.score,
@@ -532,8 +558,13 @@ def cmd_reply(args):
         out(error="reply_failed（输入框/发送按钮异常，可跑 doctor 诊断）")
     db.set_state("last_greet_ts", str(time.time()))
     db.record_reply(args.name, args.brand or "", "reply", msg)
-    inbox._audit("reply", target=args.name, outcome="ok", msg_len=len(msg))
-    out({"to": args.name, "sent": True, "message": msg})
+    score = getattr(args, "score", None)
+    inbox._audit("reply", target=args.name, outcome="ok", msg_len=len(msg), score=score)
+    # B4：greet 失败走 reply 补救的场景，分数经 --score/--job-id 落 applications
+    if score is not None and getattr(args, "job_id", ""):
+        db.record(Application(args.job_id, "", args.brand or "",
+                              status="greeted", score=score, greeting=msg))
+    out({"to": args.name, "sent": True, "message": msg, "score": score})
 
 
 def cmd_resume(args):
@@ -671,7 +702,6 @@ def main():
     e.add_argument("--title", default="")
     e.add_argument("--company", default="")
     sub.add_parser("status", help="登录态/期望职位/配额/配置/目标一致性")
-    sub.add_parser("jobs", help="当前期望页职位列表（含硬过滤与去重标注）")
     d = sub.add_parser("detail", help="打开职位详情抓JD（含30-40s节奏）")
     d.add_argument("job_id")
     d.add_argument("--title", default="")
@@ -688,11 +718,18 @@ def main():
     i = sub.add_parser("inbox", help="读取未读会话与消息（只读）")
     i.add_argument("--max", type=int, default=5)
     i.add_argument("--all", action="store_true", help="全量会话存量视图（含最后消息，不打开会话）")
+    jb = sub.add_parser("jobs", help="当前期望页职位列表（含硬过滤与去重标注）")
+    jb.add_argument("--all-tabs", dest="all_tabs", action="store_true",
+                    help="枚举全部期望标签（默认仅当前标签第1页，约池子1/6）")
     r = sub.add_parser("reply", help="回复指定会话")
     r.add_argument("name")
     r.add_argument("--msg", default="")
     r.add_argument("--msg-file", dest="msg_file", default="")
     r.add_argument("--brand", default="")
+    r.add_argument("--score", type=float, default=None,
+                   help="该职位精评分（补救发送场景回传，喂哨兵/闸门）")
+    r.add_argument("--job-id", dest="job_id", default="",
+                   help="配合 --score 落 applications（greet失败reply补救场景）")
     s = sub.add_parser("resume", help="向指定会话发送在线简历")
     s.add_argument("name")
     s.add_argument("--brand", default="")
