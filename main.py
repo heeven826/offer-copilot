@@ -162,7 +162,7 @@ def process_job(job: Job, ctx: dict) -> str:
     greeting = generate_greeting(job, ctx["profile"], fallback)
 
     res = ctx["comm"].greet(greeting, job=job, detail_open=True)
-    if not res.get("ok"):
+    if not res.get("ok") or not res.get("verified"):   # R25-2：未验证=失败，不落 greeted
         ctx["db"].mark_job(job.job_id, "failed")
         ctx["db"].record(Application(job.job_id, job.title, job.company, status="failed",
                                      score=jr2.score,
@@ -310,6 +310,8 @@ def run(args):
 
     db = Database(PROJECT_ROOT / "data" / "boss.db")
     cap = DailyCap(cfg.get("rate", {}).get("daily_greet_limit", 40), db)
+    # R25-5：自动运行可观测性——开始即落一条 audit（睡眠漏跑 vs 跑了失败可区分）
+    db.audit("run", outcome="start", mode=mode, quota_used=cap.used(), limit=cap.limit)
     logger.info(f"今日已打招呼 {cap.used()}/{cap.limit} | 打招呼联调: "
                 f"{'已就绪' if GREET_READY else '未完成(仅评估)'}")
 
@@ -358,6 +360,8 @@ def run(args):
         logger.info(
             f"本次小结: 浏览 {s['seen']} | AI评估 {s['evaluated']} | 跳过 {s['skipped']} | "
             f"待打招呼 {s['pending']} | 已打招呼 {s['greeted']} | 历史统计 {db.stats()}")
+        db.audit("run", outcome="end", seen=s["seen"], evaluated=s["evaluated"],
+                 greeted=s["greeted"], skipped=s["skipped"], pending=s["pending"])
         logger.info("日志见 logs/，投递记录见 data/boss.db")
 
 

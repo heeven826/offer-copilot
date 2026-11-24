@@ -15,20 +15,21 @@ import time
 from loguru import logger
 
 from ai.reply import decide_reply
+from .actions import CHAT_URL, SELECTORS as ACT_SELECTORS
 from .human import sleep_range
 from .risk import check_risk
 
-CHAT_URL = "https://www.zhipin.com/web/geek/chat"
 FRIEND_API = "/wapi/zprelation/friend/getGeekFriendList.json"
 
+# 选择器单一来源（B2 教训）：会话/输入框/发送按钮统一引用 actions.SELECTORS
 SELECTORS = {
-    "conv_item": "css:li[role=listitem]",
-    "conv_name": "css:span.name-text",
+    "conv_item": ACT_SELECTORS["conv_item"],
+    "conv_name": ACT_SELECTORS["conv_name"],
+    "chat_inputs": ACT_SELECTORS["chat_inputs"],
+    "chat_sends": ACT_SELECTORS["chat_sends"],
     "msg_list": "css:div.chat-record",
     "msg_item": "css:li.message-item",
     "msg_text": "css:.text-content",
-    "chat_input": "css:div.chat-input",
-    "chat_send": "css:button.btn-send",
     "resume_btn": 'xpath://div[contains(@class,"toolbar-btn") and normalize-space(text())="发简历"]',
     "resume_online": 'xpath://p[contains(text(),"发送在线简历")]',
 }
@@ -121,45 +122,15 @@ class InboxProcessor:
                 continue
         return msgs
 
-    def _reply(self, text: str) -> bool:
-        """在当前会话输入并发送回复（B2：双选择器 + 长等待 + 等 disabled 解除）。"""
-        from .actions import SELECTORS as ACT_SEL
+    def _reply(self, text: str) -> dict:
+        """在当前会话发送回复 —— 复用统一发送实现（R24-1：Enter 优先 + 回读校验）。
 
-        def first(selectors, timeout):
-            for s in selectors:
-                try:
-                    e = self.tab.ele(s, timeout=timeout)
-                except Exception:
-                    e = None
-                if e:
-                    return e
-            return None
-
-        inp = first(ACT_SEL["chat_inputs"], timeout=15)
-        if not inp:
-            logger.error("未找到聊天输入框")
-            return False
-        try:
-            self._jitter_click(inp, (-40, 40), (-3, 3))
-        except Exception:
-            pass
-        sleep_range(0.5, 1.2)
-        inp.input(text)
-        sleep_range(1.0, 2.5, "检查回复内容")
-        send = first(ACT_SEL["chat_sends"], timeout=5)
-        if not send:
-            logger.error("未找到发送按钮")
-            return False
-        for _ in range(8):   # 等输入注册、disabled 解除
-            if "disabled" not in (send.attr("class") or ""):
-                break
-            sleep_range(0.5, 1.0)
-        if "disabled" in (send.attr("class") or ""):
-            logger.error("发送按钮未激活（输入未注册）")
-            return False
-        self._jitter_click(send, (-15, 15), (-4, 4))
-        sleep_range(1, 2)
-        return True
+        返回 {"ok","stage","verified"}；**verified=False 即未发出**，
+        cmd_reply 不得据此记成功（R24-3：虚假成功历史污染统计）。
+        """
+        from .actions import Communicator
+        comm = Communicator(self.tab, self.cfg, self.db)
+        return comm.send_and_verify(text)
 
     def _send_resume(self) -> bool:
         """点击「发简历」→ 选择「发送在线简历」。"""
@@ -283,11 +254,13 @@ class InboxProcessor:
                         self.db.record_reply(name, brand, "resume-planned", text)
                 elif action == "reply" and text:
                     if send_enabled:
-                        if self._reply(text):
+                        sr = self._reply(text)
+                        if sr.get("verified"):
                             stats["replied"] += 1
                             self.db.record_reply(name, brand, "reply", text)
                         else:
                             stats["failed"] += 1
+                            logger.warning(f"回复未送达[{sr.get('stage')}]，未记录成功")
                     else:
                         logger.info(f"[观察模式] 仅记录回复: {text}")
                         self.db.record_reply(name, brand, "reply-planned", text)

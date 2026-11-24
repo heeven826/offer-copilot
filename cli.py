@@ -492,24 +492,37 @@ def cmd_greet(args):
         out(error="already_done（该职位已处理过，拒绝重复打招呼）")
     wait_pace(db, "last_greet_ts", rate.get("between_greets", [60, 70]), "打招呼")
 
+    # R25-4：HR 姓名优先取落库数据（jobs.raw_json.hr_name），避免调用方手传错人名
+    stored = db.get_job(args.job_id) or {}
+    hr = (getattr(args, "hr", "") or "").strip() or (stored.get("hr_name") or "")
+    title = args.title or stored.get("title") or ""
+    company = args.company or stored.get("company") or ""
+
     tab = connect(cfg, db)
     comm = Communicator(tab, cfg, db)
-    job = Job(job_id=args.job_id, title=args.title or "", company=args.company or "")
-    if args.title or args.company:
+    job = Job(job_id=args.job_id, title=title, company=company, hr_name=hr)
+    if title or company:
         db.save_job(job)            # title/company 落库（archive 检索依赖）
     res = comm.greet(msg, job=job)         # 内部含详情节奏/风控/拟人操作/发送验证
-    if not res.get("ok"):
-        db.mark_job(args.job_id, "failed")
-        db.record(Application(args.job_id, args.title or "", "",
-                              status="failed", greeting=msg))
-        out(error=f"greet_failed[{res.get('stage')}]: {res.get('note', '')}")
+
+    # R25-2：**未回读验证 = 失败**——不得记为 greeted（虚假投递历史会污染去重与统计）
+    if not res.get("ok") or not res.get("verified"):
+        stage = res.get("stage") or "unverified"
+        db.mark_job(args.job_id, "failed_unsent")
+        db.record(Application(args.job_id, title, "",
+                              status="failed_unsent",
+                              score=args.score if args.score is not None else 0,
+                              reason=f"[{stage}] {res.get('note', '')}"[:100],
+                              greeting=msg))
+        out(error=f"greet_failed[{stage}]: {res.get('note', '')}"
+                  "（消息未在会话中确认，未标记为已投递；可用 reply/greet 续发）")
     db.mark_job(args.job_id, "greeted")    # upsert：jobs 行不存在也能写入（P0-1 修复）
-    db.record(Application(args.job_id, args.title or "", "",
+    db.record(Application(args.job_id, title, "",
                           status="greeted", score=args.score if args.score is not None else 0,
                           greeting=msg))
-    out({"job_id": args.job_id, "sent": True, "verified": res.get("verified"),
+    out({"job_id": args.job_id, "sent": True, "verified": True,
          "sent_text": msg[:60], "stage": res.get("stage"), "score": args.score,
-         "today_greeted_by_tool": cap.used()})
+         "hr": hr, "today_greeted_by_tool": cap.used()})
 
 
 def cmd_inbox(args):
@@ -553,18 +566,22 @@ def cmd_reply(args):
     inbox = InboxProcessor(tab, cfg, db, {})
     if not inbox.find_and_open(args.name, args.brand or ""):
         out(error=f"conversation_not_found({args.name})")
-    if not inbox._reply(msg):
-        inbox._audit("reply", target=args.name, outcome="fail", msg_len=len(msg))
-        out(error="reply_failed（输入框/发送按钮异常，可跑 doctor 诊断）")
+    sr = inbox._reply(msg)
+    if not sr.get("verified"):
+        # R24-3：未回读确认不得记成功（否则 replies/audit 制造虚假历史）
+        inbox._audit("reply", target=args.name, outcome="fail",
+                     msg_len=len(msg), stage=sr.get("stage"))
+        out(error=f"reply_failed[{sr.get('stage')}]: 发送未在会话中确认，未记录为成功")
     db.set_state("last_greet_ts", str(time.time()))
     db.record_reply(args.name, args.brand or "", "reply", msg)
     score = getattr(args, "score", None)
-    inbox._audit("reply", target=args.name, outcome="ok", msg_len=len(msg), score=score)
+    inbox._audit("reply", target=args.name, outcome="ok", msg_len=len(msg),
+                 score=score, send_via=sr.get("stage"))
     # B4：greet 失败走 reply 补救的场景，分数经 --score/--job-id 落 applications
     if score is not None and getattr(args, "job_id", ""):
         db.record(Application(args.job_id, "", args.brand or "",
                               status="greeted", score=score, greeting=msg))
-    out({"to": args.name, "sent": True, "message": msg, "score": score})
+    out({"to": args.name, "sent": True, "verified": True, "message": msg, "score": score})
 
 
 def cmd_resume(args):
@@ -713,6 +730,8 @@ def main():
                    help="从文件读取话术（规避 argv 编码/引号问题，UTF-8）")
     g.add_argument("--title", default="")
     g.add_argument("--company", default="")
+    g.add_argument("--hr", default="",
+                   help="HR 姓名（会话定位用；缺省从 jobs 落库数据读取，R25-4）")
     g.add_argument("--score", type=float, default=None,
                    help="agent 模式传入自己的加权评分（0-10，允许小数）——喂 REQ-10 周漂移与 REQ-05 闸门")
     i = sub.add_parser("inbox", help="读取未读会话与消息（只读）")

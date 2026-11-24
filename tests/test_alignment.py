@@ -22,7 +22,8 @@ class TestAlignment(unittest.TestCase):
         r = compute_alignment(REAL_TABS, roles)
         self.assertFalse(r["aligned"])
         self.assertEqual(r["overlap"], [])
-        self.assertIn("空转", r["suggestion"])
+        # R23-5：改为"提示器"语义——必须给出旁证方法而不是直接让用户停手
+        self.assertIn("jobs --all-tabs", r["suggestion"])
 
     def test_generic_title_words_not_evidence(self):
         """只有"技术总监"这类通用职称交集不算对齐。"""

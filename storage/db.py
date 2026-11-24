@@ -119,6 +119,21 @@ class Database:
         )
         return cur.fetchone() is not None
 
+    def get_job(self, job_id: str) -> dict:
+        """读职位档案（jobs 行 + raw_json 字段合并）；不存在返回 {}。
+
+        用途：greet 定位会话需要 HR 姓名（R25-4：由落库数据带出，不靠调用方手传）。
+        """
+        row = self.conn.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+        if not row:
+            return {}
+        d = dict(row)
+        try:
+            d.update(json.loads(d.get("raw_json") or "{}"))
+        except Exception:
+            pass
+        return d
+
     def mark_job(self, job_id: str, status: str):
         """写入处理终态；jobs 行可能不存在（agent 流程），必须 upsert。"""
         self.conn.execute(

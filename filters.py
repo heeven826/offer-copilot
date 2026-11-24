@@ -109,9 +109,12 @@ def compute_alignment(expect_tabs: list, target_roles: list) -> dict:
             evidence.append({"token": kw, "roles": hit_roles, "tabs": hit_tabs})
 
     aligned = bool(overlap)
+    # R23-5：字面无交集 ≠ 池子不可用（宽标签"技术总监/技术合伙人"下常有对口职位）。
+    # 判定改为"提示器"：先给旁证方法，不直接建议用户停手改期望。
     suggestion = ("存在方向词交集，仍建议语义复核具体方向是否一致" if aligned else
-                  "平台期望标签与 target_roles 无方向词交集，大概率在不匹配的池子里空转；"
-                  "请语义复核后让用户改 Boss「期望管理」或 profile.yaml，改完再跑")
+                  "标签字面无交集，但这只是**词面**判断，不代表池子不可用（宽标签下常有好岗）。"
+                  "建议先跑 `jobs --all-tabs` 看 direction_match 命中率："
+                  "≥30% 即可继续投递；持续偏低再考虑调整 Boss「期望管理」")
     return {"aligned": aligned, "overlap": overlap, "evidence": evidence,
             "suggestion": suggestion}
 

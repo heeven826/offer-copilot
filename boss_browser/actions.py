@@ -22,6 +22,8 @@ from .risk import RiskControlError, check_risk
 # 2026-11-21 实测有效
 GREET_READY = True
 
+CHAT_URL = "https://www.zhipin.com/web/geek/chat"
+
 SELECTORS = {
     "job_link": "css:a.job-name",          # 卡片职位名链接（href 含 encryptJobId）
     # 「立即沟通」两套：期望页内嵌详情面板 / 独立详情页
@@ -32,8 +34,13 @@ SELECTORS = {
     # 注意：未打开会话时输入区不渲染，先确认会话已打开再查）
     "chat_inputs": ["css:div.chat-input", "css:textarea.input"],
     # 发送按钮两套：button.btn-send（主）/ div.btn-sure-v2 文本=发送（变体）
+    # ⚠️ R24-2/R25-1：按钮上方叠着 tooltip 图标层，坐标点击会落在覆盖层导致静默不发送。
+    # 统一发送实现见 send_and_verify()：Enter 优先、按钮仅作兜底。
     "chat_sends": ["css:button.btn-send",
                    'xpath://div[contains(@class,"btn-sure-v2")][normalize-space(text())="发送"]'],
+    # 会话列表（R23-1：新 UI 点「立即沟通」不再自动打开会话，需按 HR 名定位）
+    "conv_item": "css:li[role=listitem]",
+    "conv_name": "css:span.name-text",
 }
 
 
@@ -215,59 +222,42 @@ class Communicator:
                     return fail("open_detail", "未找到职位卡片且无ID")
 
             btn = self._first_ele(SELECTORS["greet_buttons"], timeout=5)
+            resumed = False
             if not btn:
-                # 检查是否「继续沟通」（已在会话中）
+                # R23-2：「继续沟通」= 已有会话（可能是之前失败留下的空会话）→ 续发，而不是判失败
                 try:
                     cont = self.tab.ele('xpath://a[contains(@class,"op-btn") '
                                         'and contains(text(),"继续沟通")]', timeout=2)
                 except Exception:
                     cont = None
-                if cont:
-                    return fail("already_in_conversation", "按钮为「继续沟通」，此前已建立会话")
-                return fail("greet_button", "职位可能已关闭/下线")
+                if not cont:
+                    return fail("greet_button", "职位可能已关闭/下线")
+                logger.info("按钮为「继续沟通」——已有会话，走续发")
+                btn = cont
+                resumed = True
             self._jitter_click(btn, (-40, 40), (-8, 8))
             sleep_range(2, 3.5, "等待聊天页")
             check_risk(self.tab)
             # 注意：走到这里会话已建立 —— 之后的失败都会留下空会话（消息未发）
 
-            inp = self._first_ele(SELECTORS["chat_inputs"], timeout=15)   # B1：连续发送时渲染变慢，6s不足
-            if not inp:
-                return fail("chat_input", "会话已建立但输入框未渲染（注意：空会话已产生，消息未发）")
-            try:
-                self._jitter_click(inp, (-40, 40), (-3, 3))
-            except Exception:
-                pass          # 元素无坐标时跳过点击，直接输入
-            sleep_range(0.5, 1.2)
-            try:
-                inp.input(greeting_text)
-            except Exception:
-                inp.input(greeting_text, by_js=True)   # rect 异常时的兜底
-            sleep_range(1.0, 2.8, "检查话术")   # 发送前的犹豫
+            # R23-1：新 UI 不自动打开会话 —— 按 HR 名定位（定位不到就放弃，绝不猜人）
+            if not self.ensure_conversation_open(job):
+                return fail("conversation_not_open",
+                            "会话未自动打开且按 HR 名定位失败（空会话可能已产生，消息未发）")
 
-            send = self._first_ele(SELECTORS["chat_sends"], timeout=3)
-            if not send:
-                return fail("send_button", "已输入但未找到发送按钮（空会话已产生）")
-            # 等待 disabled 状态消失（输入未触发框架响应则按钮不可用）
-            for _ in range(6):
-                if "disabled" not in (send.attr("class") or ""):
-                    break
-                sleep_range(0.5, 1.0)
-            if "disabled" in (send.attr("class") or ""):
-                return fail("send_disabled", "发送按钮未激活（输入可能未注册，空会话已产生）")
-            self._jitter_click(send, (-15, 15), (-4, 4))
-            sleep_range(1.5, 2.5)
-
-            # 发送后验证：读会话最后一条我方消息比对
-            verified = self._verify_sent(greeting_text)
+            # R24/R25：统一发送实现（Enter 优先、按钮兜底、回读校验）
+            sr = self.send_and_verify(greeting_text)
+            if not sr["verified"]:
+                return fail(f"send_{sr['stage']}",
+                            "已输入但未能在会话中确认消息（空会话已产生，消息未发）")
             self._set_ts("last_greet_ts")     # 跨进程消息节奏锚点
             self._audit("greet", target=getattr(job, "job_id", "") or "",
-                        outcome="ok", stage="done" if verified else "done_unverified",
-                        verified=verified, msg_len=len(greeting_text),
+                        outcome="ok", stage="done", verified=True, resumed=resumed,
+                        send_via=sr["stage"], msg_len=len(greeting_text),
                         truncated=_truncated, duration=round(time.time() - _start_ts, 1))
-            result.update(ok=True, verified=verified,
-                          stage="done" if verified else "done_unverified",
-                          note="" if verified else "已点击发送但未能在会话中确认，请人工核对")
-            logger.success(f"已发送打招呼(verified={verified}): {greeting_text[:36]}…")
+            result.update(ok=True, verified=True, stage="done",
+                          note="续发（已有会话）" if resumed else "")
+            logger.success(f"已发送打招呼(verified=True, {sr['stage']}): {greeting_text[:36]}…")
             self._back()
             return result
         except RiskControlError as e:
@@ -276,6 +266,117 @@ class Communicator:
             return fail("risk", "触发平台安全验证——已暂停，请人工在浏览器完成后重试")
         except Exception as e:
             return fail("exception", f"{type(e).__name__}: {e}"[:120])
+
+    def _press_enter(self) -> bool:
+        """键盘 Enter 发送（R25-3：按钮坐标点击 0/3 成功，Enter 21/21 成功）。"""
+        try:
+            from DrissionPage.common import Keys
+            self.tab.actions.type(Keys.ENTER)
+            return True
+        except Exception as e:
+            logger.debug(f"Enter 发送失败: {e}")
+            return False
+
+    def _input_has_text(self) -> bool:
+        """输入框是否还有未发出的内容（contenteditable 与 textarea 两种都查）。"""
+        try:
+            inp = self._first_ele(SELECTORS["chat_inputs"], timeout=2)
+            if not inp:
+                return False
+            txt = (inp.text or "").strip()
+            if not txt:
+                txt = (inp.attr("value") or "").strip()
+            return bool(txt)
+        except Exception:
+            return False
+
+    def send_and_verify(self, text: str, timeout_input: int = 15) -> dict:
+        """统一发送实现（R24-4/R25-1）：Enter 优先 → 按钮兜底 → 回读校验。
+
+        **只有回读到我方消息才算成功**——返回 {"ok": bool, "stage": str, "verified": bool}。
+        调用方必须已打开目标会话。greet/reply 共用本实现，不再各自点按钮。
+        """
+        inp = self._first_ele(SELECTORS["chat_inputs"], timeout=timeout_input)
+        if not inp:
+            return {"ok": False, "stage": "chat_input", "verified": False}
+        try:
+            self._jitter_click(inp, (-40, 40), (-3, 3))
+        except Exception:
+            pass
+        sleep_range(0.5, 1.2)
+        try:
+            inp.input(text)
+        except Exception:
+            try:
+                inp.input(text, by_js=True)
+            except Exception:
+                return {"ok": False, "stage": "input_failed", "verified": False}
+        sleep_range(0.8, 1.6)
+
+        # ① Enter 发送（主路径）
+        self._press_enter()
+        sleep_range(1.2, 2.0)
+        if self._verify_sent(text, timeout=6):
+            return {"ok": True, "stage": "done", "verified": True}
+
+        # ② 按钮兜底：仅当输入框仍有内容（Enter 未生效）时才点，且等 disabled 解除
+        if self._input_has_text():
+            send = self._first_ele(SELECTORS["chat_sends"], timeout=3)
+            if send:
+                for _ in range(6):
+                    if "disabled" not in (send.attr("class") or ""):
+                        break
+                    sleep_range(0.5, 1.0)
+                if "disabled" not in (send.attr("class") or ""):
+                    self._jitter_click(send, (-15, 15), (-4, 4))
+                    sleep_range(1.5, 2.5)
+                    if self._verify_sent(text, timeout=6):
+                        return {"ok": True, "stage": "done_btn", "verified": True}
+        return {"ok": False, "stage": "send_unverified", "verified": False}
+
+    def _find_conv_by_hr(self, hr: str):
+        """在会话列表按 HR 姓名精确定位可点击元素（找不到返回 None，绝不猜人）。"""
+        try:
+            items = self.tab.eles(SELECTORS["conv_item"])
+        except Exception:
+            return None
+        for it in items:
+            try:
+                nm = it.ele(SELECTORS["conv_name"], timeout=0.5)
+                if nm and (nm.text or "").strip() == hr:
+                    inner = it.ele("css:div.friend-content", timeout=0.5)
+                    return inner or it
+            except Exception:
+                continue
+        return None
+
+    def ensure_conversation_open(self, job=None, timeout: int = 12) -> bool:
+        """确保聊天页已打开与 job.hr_name 对应的会话（R23-1）。
+
+        新 UI 点「立即沟通」只跳 /web/geek/chat、不自动打开会话；
+        这里按 HR 姓名精确定位。**定位不到就放弃**——发错人的代价远高于失败。
+        """
+        deadline = time.time() + timeout
+        first = True
+        while time.time() < deadline:
+            if self._first_ele(SELECTORS["chat_inputs"], timeout=2 if first else 1):
+                return True
+            first = False
+            hr = (getattr(job, "hr_name", "") or "").strip()
+            if not hr:
+                logger.warning("缺少 HR 姓名，无法安全定位会话（不猜人）")
+                return False
+            if "/web/geek/chat" not in (self.tab.url or ""):
+                self.tab.get(CHAT_URL)
+                sleep_range(2, 3, "等待聊天页加载")
+            item = self._find_conv_by_hr(hr)
+            if item:
+                logger.info(f"按 HR 名定位会话: {hr}")
+                self._jitter_click(item, (-60, 60), (-5, 5))
+                sleep_range(2, 3.5, "等待会话打开")
+            else:
+                time.sleep(1.5)   # 新会话可能还在渲染，稍等再试
+        return bool(self._first_ele(SELECTORS["chat_inputs"], timeout=2))
 
     def _verify_sent(self, text: str, timeout: int = 6) -> bool:
         """读当前会话最后几条我方消息，确认与发送内容匹配。"""

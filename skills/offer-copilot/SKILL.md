@@ -52,10 +52,10 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 | `jobs` | 当前期望页职位列表（含硬过滤与去重标注） | 只读 |
 | `detail <job_id> --title 职位名` | 打开详情抓职位描述(JD) | 30-40s 查看间隔 |
 | `eval <job_id> --score N --verdict pass\|reject [--title T] [--company C]` | **精评结果独立落库（必用）**：每次精评完成后无论投不投都记录——打分哨兵/复审闸门的完整数据源（只记 greet 会漏掉被拒样本，哨兵只剩幸存者） | 只读库写入 |
-| `greet <job_id> --msg "…" \| --msg-file f.txt --score N [--title T] [--company C]` | 发送打招呼（含发送后验证）；**对决定打招呼的职位必须带 --score**（你的加权分0-10，允许小数）。未传 --score 只在 stderr 提醒，不阻断、退出码不变 | 60-70s 间隔(自动等待)、每日上限、去重、≤300字符 |
+| `greet <job_id> --msg "…" \| --msg-file f.txt --score N [--title T] [--company C] [--hr 姓名]` | 发送打招呼（Enter 优先+回读校验）；**对决定打招呼的职位必须带 --score**（加权分0-10，允许小数）。`--hr` 缺省从 jobs 落库读取。**只有 verified=true 才算投递成功**；verified=false 时返回错误、不标记已投递（可重新 greet，会自动定位已有会话续发） | 60-70s 间隔(自动等待)、每日上限、去重、≤300字符 |
 | `inbox [--max 5]` | 读取未读会话与消息（只读） | 只读 |
 | `inbox --all` | 全量会话存量视图（面试准备/存量清扫用） | 只读 |
-| `reply <HR姓名> --msg "…" [--brand 公司]` | 回复会话 | 60-70s 间隔、≤300字符 |
+| `reply <HR姓名> --msg "…" [--brand 公司] [--score N --job-id ID]` | 回复会话（Enter 优先+回读校验）。**未在会话中回读确认即视为失败**，不写成功记录；`--score/--job-id` 用于 greet 失败后走 reply 补救时回传分数 | 60-70s 间隔、≤300字符 |
 | `resume <HR姓名> [--brand 公司]` | 发送在线简历 | 双方回复过才可用 |
 | `archive [--top N] [--status greeted] [--query 词]` | 查询职位沉淀档案 | 只读 |
 | `run` | 全自主模式（**需要 .env 配置 AI key**；agent 模式用不上，别推荐给用户） | 全部护栏 |

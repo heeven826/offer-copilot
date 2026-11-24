@@ -50,7 +50,7 @@ def truncate_rate(events: list, window: int = 30) -> dict:
     return {"value": rate(t, len(recent)), "samples": len(recent), "window": window}
 
 
-def score_drift(score_rows: list) -> dict:
+def score_drift(score_rows: list, today=None) -> dict:
     """打分分布周漂移：本周 vs 上周平均分（按 pass/reject 分组，R17-2）。
 
     - R14-1：score<=0 视为"未评分"，排除出均值（unscored 单列）
@@ -58,7 +58,7 @@ def score_drift(score_rows: list) -> dict:
       ——混合均值会混淆"质量变化"与"投递策略变化"，分组合并诊断
     - R17-5 语义：greeted 带分视作 pass 组（投了=通过）
     """
-    today = date.today()
+    today = today or date.today()     # R23-4：可注入日期，消除测试的星期依赖
     wk_start = today - timedelta(days=today.weekday())
     last_start = wk_start - timedelta(days=7)
 

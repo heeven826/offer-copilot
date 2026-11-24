@@ -41,19 +41,25 @@ class TestRates(unittest.TestCase):
 
 
 class TestDrift(unittest.TestCase):
+    # R23-4：固定"今天"为周三，消除用例对真实星期几的依赖（周一会挂）
+    FIXED_TODAY = date(2026, 11, 25)      # 周三
+
     def _rows(self, days_ago, score, n, status="evaluated_pass"):
-        d = (date.today() - timedelta(days=days_ago)).isoformat()
+        d = (self.FIXED_TODAY - timedelta(days=days_ago)).isoformat()
         return [{"score": score, "created_at": d, "status": status}] * n
+
+    def _drift(self, rows):
+        return score_drift(rows, today=self.FIXED_TODAY)
 
     def test_drift_computed(self):
         rows = self._rows(1, 8, 12) + self._rows(8, 5, 12)   # 本周8 上周5
-        sd = score_drift(rows)
+        sd = self._drift(rows)
         self.assertEqual(sd["drift"], 3.0)
         self.assertTrue(sd["judgeable"])
 
     def test_baseline_not_judgeable(self):
         rows = self._rows(1, 8, 3) + self._rows(8, 5, 3)     # 样本不足
-        sd = score_drift(rows)
+        sd = self._drift(rows)
         self.assertFalse(sd["judgeable"])
         self.assertIsNone(sd["drift"])
         self.assertIn("/10", sd["insufficient"])              # R14 note：明示差多少
@@ -63,7 +69,7 @@ class TestDrift(unittest.TestCase):
         rows = self._rows(1, 8, 12) + self._rows(8, 5, 12)
         zeros = [{"score": 0, "created_at": (date.today() - timedelta(days=1)).isoformat(),
                   "status": "greeted"}] * 20
-        sd = score_drift(rows + zeros)
+        sd = self._drift(rows + zeros)
         self.assertEqual(sd["this_week"]["pass_n"], 12)       # 0分被排除
         self.assertEqual(sd["unscored_excluded"], 20)
         self.assertEqual(sd["drift"], 3.0)                    # 均值不被拉低
@@ -72,7 +78,7 @@ class TestDrift(unittest.TestCase):
         """R16-1：被拒样本（evaluated_reject）必须进漂移统计——防幸存者偏差。"""
         rows = self._rows(1, 6, 10, status="evaluated_reject") + \
                self._rows(8, 6, 10, status="evaluated_reject")
-        sd = score_drift(rows)
+        sd = self._drift(rows)
         self.assertEqual(sd["this_week"]["reject_n"], 10)     # reject 组独立计数
         self.assertEqual(sd["this_week"]["reject_avg"], 6.0)
         self.assertEqual(sd["drift"], 0.0)
@@ -81,7 +87,7 @@ class TestDrift(unittest.TestCase):
         """R17-2：pass/reject 分组各报均值——混合均值会混淆质量与策略变化。"""
         rows = (self._rows(1, 8, 10) + self._rows(1, 5, 10, status="evaluated_reject") +
                 self._rows(8, 8, 10) + self._rows(8, 5, 10, status="evaluated_reject"))
-        sd = score_drift(rows)
+        sd = self._drift(rows)
         self.assertEqual(sd["this_week"]["pass_avg"], 8.0)
         self.assertEqual(sd["this_week"]["reject_avg"], 5.0)
         self.assertEqual(sd["drift"], 0.0)   # 两组各自无漂移，混合值也不动
