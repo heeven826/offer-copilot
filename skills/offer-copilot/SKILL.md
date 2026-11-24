@@ -39,6 +39,8 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 - `status` 返回 `not_logged_in` → 运行 `setup` 引导用户扫码
 - Chrome 未启动 → CLI 会**尝试**自动拉起（约30s，stderr 有进度提示）；**冷启动或受限桌面环境下自动拉起通常失败**（报 chrome_not_running）→ 让用户手动启动一次，之后 CLI 会接管已有实例：
   `chrome --remote-debugging-port=9222 --user-data-dir=./chrome_profile`
+  - **端口可能被占用**（如微信开发者工具占 9222）：改 `config.yaml` 的 `browser.debug_port` 换一个空闲端口再跑
+  - **受限沙箱里 Chrome 可能起不来**（crashpad 无法写入即自终止）：此时只能让用户在本机桌面手动启动一次；把 `browser.auto_launch` 设为 `false` 可让失败在 1 秒内返回而不是等 30 秒
 
 ## 1. 命令速查（全部输出 UTF-8 JSON）
 
@@ -49,7 +51,7 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 | `doctor` | **环境自检**：登录/期望标签/关键选择器逐项体检。**判定看 data.ready 与退出码**：未全过时 `ok:false`、`ready:false`、退出码 1；多项选择器同时失败=页面未就绪，重跑一次再判断 | 只读 |
 | `health` | **账号健康**（REQ-10）：今日操作一屏回看 + 预警线（发送失败率/风控频率）+ 质量哨兵（JD抓取率/打分周漂移/截断率）。healthy 退出码 0；warning 退出码 1 且 warnings 数组给原因与建议 | 只读 |
 | `status` | 登录态/期望职位/配额/配置/**目标方向一致性** | 只读 |
-| `jobs` | 当前期望页职位列表（含硬过滤与去重标注） | 只读 |
+| `jobs [--all-tabs]` | 职位列表（含硬过滤/方向信号/去重标注）。**默认只抓当前标签第 1 页（约池子 1/6），输出 `scope` 字段明示范围**；`--all-tabs` 枚举全部期望标签。同一标签重复执行返回同一批，不会轮换 | 只读 |
 | `detail <job_id> --title 职位名` | 打开详情抓职位描述(JD) | 30-40s 查看间隔 |
 | `eval <job_id> --score N --verdict pass\|reject [--title T] [--company C]` | **精评结果独立落库（必用）**：每次精评完成后无论投不投都记录——打分哨兵/复审闸门的完整数据源（只记 greet 会漏掉被拒样本，哨兵只剩幸存者） | 只读库写入 |
 | `greet <job_id> --msg "…" \| --msg-file f.txt --score N [--title T] [--company C] [--hr 姓名]` | 发送打招呼（Enter 优先+回读校验）；**对决定打招呼的职位必须带 --score**（加权分0-10，允许小数）。`--hr` 缺省从 jobs 落库读取。**只有 verified=true 才算投递成功**；verified=false 时返回错误、不标记已投递（可重新 greet，会自动定位已有会话续发） | 60-70s 间隔(自动等待)、每日上限、去重、≤300字符 |
@@ -70,7 +72,12 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 - 触发平台安全验证时 CLI 暂停等待人工处理，不要重试轰炸
 
 **错误读法**：`greet_failed[阶段]: 说明` —— 阶段区分了原因：
-`open_detail`（卡片消失）/ `greet_button`（职位关闭）/ `already_in_conversation`（已在会话中，跳过即可）/ `chat_input`·`send_button`·`send_disabled`（**注意：此时空会话已产生但消息未发**）/ `verify_failed`（已发送但未确认，需人工核对）。选择器类失败 → 先跑 `doctor` 判断是否站点改版。
+`open_detail`（卡片消失）/ `greet_button`（职位关闭）/ `conversation_not_open`（会话未自动打开且按 HR 名定位失败）/ `chat_input`（输入框未渲染）/ `send_unverified`（**已输入但未在会话中确认——消息未发出，空会话可能已产生**）/ `risk`（触发验证）。
+
+关键语义（R25 修复后）：
+- **只有 `verified=true` 才算投递成功**；`verified=false` 一律返回错误，且**不会**标记为已投递（状态为 `failed_unsent`，可直接重跑 greet，会自动定位已有会话续发）
+- 「继续沟通」不再判失败——重新 greet 会续发到已有会话
+- 选择器类失败 → 先跑 `doctor` 判断是否站点改版
 
 ## 2. 标准作业流程：每日投递
 
@@ -78,12 +85,13 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 ⓪ doctor（首次或失败后） → 环境体检，全绿再继续
 ① status → 确认登录、配额；【关键】核对 expect_tabs 与 profile 的
    target_roles 方向是否一致——不一致 = 在不匹配的池子里空转，
-   必须停下来让用户改平台期望（Boss App 期望管理）或 profile.yaml，改完再跑
+   ——注意 `alignment` 是**提示器不是闸门**：字面无交集不代表池子不可用（宽标签下常有好岗）。
+   先跑 `jobs --all-tabs` 看 `direction_match` 命中率，≥30% 即继续投递；持续偏低再提示用户调整期望
 ② jobs          → 拿当前列表（filter_ok=false 的直接跳过，别评估）
 ③ 初筛（你来做）→ 按第3节打分标准，仅凭列表信息给 0-10 分
 ④ ≥6分的 → detail 抓 JD → 精评（第3节，信息更全再打一次分）
 ⑤ 精评 ≥7分 → 按第4节规则写话术 → 【话术给用户过目确认】→ greet
-⑥ 循环 ②-⑤（jobs 重新执行会拿到轮换后的新列表）
+⑥ 循环 ②-⑤（**同一标签重复 jobs 通常返回同一批**，不会轮换；要扩大样本用 `jobs --all-tabs` 或切换期望标签）
 ⑦ 收尾：inbox 看未读 → 按第5节起草回复/发简历 → 用户确认后执行
 ```
 
@@ -155,6 +163,7 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 | `not_logged_in` | 运行 `setup`，让用户扫码 |
 | `daily_cap_reached` | 告知用户今日已达上限，明天再跑 |
 | `already_done` | 正常查重，跳过即可 |
-| `greet_failed` | 看 `[stage]`：`already_in_conversation` 跳过；`chat_input`/`send_*` 阶段已产生空会话需告知用户；选择器类失败先跑 `doctor` |
+| `greet_failed` | 看 `[stage]`：`send_unverified` = 消息未发出（状态 `failed_unsent`，可重跑续发）；`conversation_not_open` = 缺 HR 名或定位失败；选择器类失败先跑 `doctor` |
+| `failed_unsent` | 未确认送达的职位，**可重试**；重跑 greet 会自动定位已有会话续发，不会重复建会话 |
 | `chrome_not_running` | 自动拉起失败（冷启动/受限桌面常见）。让用户手动启动：`chrome --remote-debugging-port=<端口> --user-data-dir=./chrome_profile`，重跑即接管 |
 | Chrome 没反应 | CLI 尝试自动拉起（约30s，非卡死）；失败则按 chrome_not_running 处理 |

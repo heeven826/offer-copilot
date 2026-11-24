@@ -91,10 +91,17 @@ class Database:
     # ---------- 职位档案 ----------
 
     def save_job(self, job: Job):
-        """全量沉淀：所有见过的职位都入库（不覆盖已有状态）。"""
+        """全量沉淀：所有见过的职位都入库。
+
+        R26-2：已存在行刷新元数据（title/薪资/公司/链接/raw_json——含 hr_name），
+        但**绝不覆盖 status**（去重依赖终态）。旧行缺 hr_name 时重跑 jobs 即补齐。
+        """
         self.conn.execute(
-            "INSERT OR IGNORE INTO jobs (job_id, title, salary, company, link, status, raw_json) "
-            "VALUES (?,?,?,?,?,'seen',?)",
+            "INSERT INTO jobs (job_id, title, salary, company, link, status, raw_json) "
+            "VALUES (?,?,?,?,?,'seen',?) "
+            "ON CONFLICT(job_id) DO UPDATE SET "
+            "title=excluded.title, salary=excluded.salary, company=excluded.company, "
+            "link=excluded.link, raw_json=excluded.raw_json",
             (job.job_id, job.title, job.salary, job.company, job.link,
              json.dumps(job.to_dict(), ensure_ascii=False)),
         )

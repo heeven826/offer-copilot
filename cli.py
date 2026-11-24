@@ -329,32 +329,10 @@ def cmd_status(args):
     })
 
 
-def cmd_jobs(args):
-    cfg = load_cfg()
-    db = open_db(args)
-    tab = connect(cfg, db)
-    en = ExpectNavigator(tab, cfg)
-    en.open()
-    all_tabs = getattr(args, "all_tabs", False)
-    raws, page, has_more = en.capture_jobs()
-    if all_tabs:
-        # R20-ERRATUM：默认只抓当前标签第一页（约池子的1/6）——全标签枚举
-        n_tabs = len(en.expect_tabs())
-        for i in range(1, n_tabs):
-            en.click_tab_by_index(i)
-            more, _, hm = en.capture_jobs()
-            raws.extend(more)
-            has_more = has_more or hm
-        seen_ids = set()
-        raws = [r for r in raws
-                if not (r.get("encryptJobId") in seen_ids or seen_ids.add(r.get("encryptJobId")))]
-        scope = f"全部{n_tabs}个期望标签第1页（约{len(raws)}个）"
-    else:
-        scope = "仅当前期望标签第1页——池子还有其余标签与更多页，样本不完整（--all-tabs 可全标签）"
-    en.close()
+def build_jobs_payload(raws: list, roles: list, cfg: dict, db) -> list:
+    """原始职位数据 → CLI 输出载荷（纯逻辑，便于冒烟测试——R26-1 回归）。"""
     data = []
-    roles = target_roles_of(profile_of())   # 画像目标方向（direction_match 用）
-    for raw in jobs:
+    for raw in raws:      # R26-1：曾误写为 jobs（NameError，jobs 命令整条不可用）
         lo, months = parse_salary(raw.get("salaryDesc") or "")
         eff = effective_monthly(lo, months) if lo else None
         j = Job(job_id=raw.get("encryptJobId", ""), title=raw.get("jobName", ""),
@@ -406,7 +384,35 @@ def cmd_jobs(args):
             "filter_ok": ok,
             "filter_reason": why,
             "processed": db.is_done(raw.get("encryptJobId", "")),
-        })
+    })
+    return data
+
+
+def cmd_jobs(args):
+    cfg = load_cfg()
+    db = open_db(args)
+    tab = connect(cfg, db)
+    en = ExpectNavigator(tab, cfg)
+    en.open()
+    all_tabs = getattr(args, "all_tabs", False)
+    raws, page, has_more = en.capture_jobs()
+    if all_tabs:
+        # R20-ERRATUM：默认只抓当前标签第一页（约池子的1/6）——全标签枚举
+        n_tabs = len(en.expect_tabs())
+        for i in range(1, n_tabs):
+            en.click_tab_by_index(i)
+            more, _, hm = en.capture_jobs()
+            raws.extend(more)
+            has_more = has_more or hm
+        seen_ids = set()
+        raws = [r for r in raws
+                if not (r.get("encryptJobId") in seen_ids or seen_ids.add(r.get("encryptJobId")))]
+        scope = f"全部{n_tabs}个期望标签第1页（约{len(raws)}个）"
+    else:
+        scope = "仅当前期望标签第1页——池子还有其余标签与更多页，样本不完整（--all-tabs 可全标签）"
+    en.close()
+    roles = target_roles_of(profile_of())   # 画像目标方向（direction_match 用）
+    data = build_jobs_payload(raws, roles, cfg, db)
     out({"page": page, "has_more": has_more, "scope": scope,
          "count": len(data), "jobs": data})
 
