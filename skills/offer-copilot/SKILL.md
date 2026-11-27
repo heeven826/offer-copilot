@@ -74,8 +74,11 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 **错误读法**：`greet_failed[阶段]: 说明` —— 阶段区分了原因：
 `open_detail`（卡片消失）/ `greet_button`（职位关闭）/ `conversation_not_open`（会话未自动打开且按 HR 名定位失败）/ `chat_input`（输入框未渲染）/ `send_unverified`（**已输入但未在会话中确认——消息未发出，空会话可能已产生**）/ `risk`（触发验证）。
 
-关键语义（R25 修复后）：
+关键语义（R25/R28/R30 修复后）：
 - **只有 `verified=true` 才算投递成功**；`verified=false` 一律返回错误，且**不会**标记为已投递（状态为 `failed_unsent`，可直接重跑 greet，会自动定位已有会话续发）
+- **身份校验（R30）**：发送前必须通过「会话头含目标 HR 名 + 职位/公司」校验；失败返回 `identity_mismatch` 并**拒绝发送**（宁可失败，不可发错人）。会话定位只用 HR 名精确匹配，绝不猜人
+- **窗口最小化**会让编辑器塌成 0 高度 → `editor_collapsed`（还原/最大化窗口后重试；启动时已加 `--start-maximized`）
+- **并发互斥（R29）**：发送类命令（greet/reply/resume）持有 `data/.send.lock`，第二个进程返回 `locked`；锁 10 分钟自动失效
 - 「继续沟通」不再判失败——重新 greet 会续发到已有会话
 - 选择器类失败 → 先跑 `doctor` 判断是否站点改版
 
@@ -165,5 +168,8 @@ Windows 用户也可以直接用 `boss.bat <子命令>`（自动调用 .venv）�
 | `already_done` | 正常查重，跳过即可 |
 | `greet_failed` | 看 `[stage]`：`send_unverified` = 消息未发出（状态 `failed_unsent`，可重跑续发）；`conversation_not_open` = 缺 HR 名或定位失败；选择器类失败先跑 `doctor` |
 | `failed_unsent` | 未确认送达的职位，**可重试**；重跑 greet 会自动定位已有会话续发，不会重复建会话 |
+| `identity_mismatch` | 打开的会话与目标 HR/职位不符，**已拒绝发送**。检查 `--hr` 或重跑 jobs 补全 hr_name |
+| `editor_collapsed` | 窗口最小化导致编辑器 0 高度；让用户还原/最大化 Chrome 窗口后重试 |
+| `locked` | 另一个进程正在操作浏览器（多会话/定时任务并发）。等它结束，不要强杀 |
 | `chrome_not_running` | 自动拉起失败（冷启动/受限桌面常见）。让用户手动启动：`chrome --remote-debugging-port=<端口> --user-data-dir=./chrome_profile`，重跑即接管 |
 | Chrome 没反应 | CLI 尝试自动拉起（约30s，非卡死）；失败则按 chrome_not_running 处理 |

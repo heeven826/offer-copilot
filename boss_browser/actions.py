@@ -41,6 +41,11 @@ SELECTORS = {
     # 会话列表（R23-1：新 UI 点「立即沟通」不再自动打开会话，需按 HR 名定位）
     "conv_item": "css:li[role=listitem]",
     "conv_name": "css:span.name-text",
+    # 会话头（R30：身份校验锚点，形如「石女士/猎头顾问/AI4S解决方案产品专家/60-80K」）
+    "conv_headers": ["css:.top-info-content", "css:.chat-top-info", "css:.message-top-info"],
+    # 详情页职位名（R29-1：防 JD 串页）
+    "detail_names": ["css:.job-banner .name", "css:.job-detail-info .name",
+                     "css:.job-info-primary .name", "css:h1"],
 }
 
 
@@ -170,11 +175,46 @@ class Communicator:
             sleep_range(2.5, 4.0, "等待详情页加载")
 
         jd = self.read_job_desc()
+        via = "card" if link else "url"
+
+        # R29-1：防 JD 串页——读到的是别家岗位（页面上残留的详情面板）时，直接开详情页重读
+        if jd and job is not None and not self._detail_matches(job):
+            logger.warning(f"详情页与目标职位不符，回退 URL 直开: {job.brief()}")
+            self.tab.get(f"https://www.zhipin.com/job_detail/{eid}.html")
+            sleep_range(2.5, 4.0, "等待详情页加载")
+            jd = self.read_job_desc()
+            via = "url_retry"
+            if jd and not self._detail_matches(job):
+                self._audit("detail", target=eid, outcome="warn",
+                            jd_len=len(jd), via=via, mismatch=True)
+                logger.warning("URL 直开仍与目标职位不符，丢弃该 JD")
+                return ""
+
         if jd:
             logger.debug(f"已抓取职位描述 {len(jd)} 字")
         self._audit("detail", target=eid, outcome="ok" if jd else "warn",
-                    jd_len=len(jd), via="card" if link else "url")
+                    jd_len=len(jd), via=via)
         return jd
+
+    def _detail_title(self) -> str:
+        for sel in SELECTORS["detail_names"]:
+            try:
+                e = self.tab.ele(sel, timeout=1)
+                if e:
+                    t = (e.text or "").strip()
+                    if t:
+                        return self._norm(t)
+            except Exception:
+                continue
+        return ""
+
+    def _detail_matches(self, job) -> bool:
+        """详情页标题是否属于目标职位（R29-1）。无法读取标题时按不符处理（宁可重试）。"""
+        title = self._norm(getattr(job, "title", "") or "")
+        seen = self._detail_title()
+        if not seen or not title:
+            return False
+        return title[:6] in seen or seen[:6] in title
 
     def greet(self, greeting_text: str, job=None, detail_open: bool = False) -> dict:
         """发送打招呼话术。返回 {"ok": bool, "stage": str, "verified": bool, "note": str}。
@@ -244,12 +284,18 @@ class Communicator:
             if not self.ensure_conversation_open(job):
                 return fail("conversation_not_open",
                             "会话未自动打开且按 HR 名定位失败（空会话可能已产生，消息未发）")
+            # R30 P0：发送前再断言一次身份——宁可失败，不可发错人
+            if not self.identity_ok(job):
+                return fail("identity_mismatch",
+                            "会话身份与目标 HR/职位不符，拒绝发送（防止发错人）")
 
             # R24/R25：统一发送实现（Enter 优先、按钮兜底、回读校验）
             sr = self.send_and_verify(greeting_text)
             if not sr["verified"]:
-                return fail(f"send_{sr['stage']}",
-                            "已输入但未能在会话中确认消息（空会话已产生，消息未发）")
+                st = sr["stage"]
+                # R28-3：避免 send_send_xxx 双前缀
+                stage = st if st.startswith("send_") else f"send_{st}"
+                return fail(stage, "已输入但未能在会话中确认消息（空会话已产生，消息未发）")
             self._set_ts("last_greet_ts")     # 跨进程消息节奏锚点
             self._audit("greet", target=getattr(job, "job_id", "") or "",
                         outcome="ok", stage="done", verified=True, resumed=resumed,
@@ -268,7 +314,21 @@ class Communicator:
             return fail("exception", f"{type(e).__name__}: {e}"[:120])
 
     def _press_enter(self) -> bool:
-        """键盘 Enter 发送（R25-3：按钮坐标点击 0/3 成功，Enter 21/21 成功）。"""
+        """键盘 Enter 发送（R25-3：Enter 远优于按钮坐标点击）。
+
+        R28-2：窗口最小化等状态下 `actions.type` 会静默失效 → **CDP 派发优先**，
+        actions.type 仅作兜底。
+        """
+        try:
+            self.tab.run_cdp("Input.dispatchKeyEvent", type="keyDown", key="Enter",
+                             code="Enter", windowsVirtualKeyCode=13,
+                             nativeVirtualKeyCode=13, text="\r")
+            self.tab.run_cdp("Input.dispatchKeyEvent", type="keyUp", key="Enter",
+                             code="Enter", windowsVirtualKeyCode=13,
+                             nativeVirtualKeyCode=13)
+            return True
+        except Exception as e:
+            logger.debug(f"CDP Enter 失败，回落 actions.type: {e}")
         try:
             from DrissionPage.common import Keys
             self.tab.actions.type(Keys.ENTER)
@@ -299,6 +359,14 @@ class Communicator:
         inp = self._first_ele(SELECTORS["chat_inputs"], timeout=timeout_input)
         if not inp:
             return {"ok": False, "stage": "chat_input", "verified": False}
+        # R28-1：窗口最小化时编辑器塌成 0 高度，输入/Enter 都会静默失效
+        try:
+            h = inp.rect.size.height
+            if h is not None and h <= 10:
+                logger.warning(f"聊天编辑器高度 {h}px——窗口可能被最小化")
+                return {"ok": False, "stage": "editor_collapsed", "verified": False}
+        except Exception:
+            pass
         try:
             self._jitter_click(inp, (-40, 40), (-3, 3))
         except Exception:
@@ -334,6 +402,62 @@ class Communicator:
                         return {"ok": True, "stage": "done_btn", "verified": True}
         return {"ok": False, "stage": "send_unverified", "verified": False}
 
+    def _conv_header_text(self) -> str:
+        """读会话头文本（R30 身份锚点）。"""
+        for sel in SELECTORS["conv_headers"]:
+            try:
+                e = self.tab.ele(sel, timeout=1)
+                if e:
+                    t = (e.text or "").strip()
+                    if t:
+                        return t
+            except Exception:
+                continue
+        return ""
+
+    @staticmethod
+    def _norm(s: str) -> str:
+        import re as _re
+        return _re.sub(r"\s+", "", s or "")
+
+    def identity_ok(self, job) -> bool:
+        """**发送前身份校验（R30 P0）**：会话头必须同时含目标 HR 名与职位/公司信号。
+
+        输入框存在 ≠ 会话正确（可能是上一个会话）。校验不通过一律不发：
+        宁可失败，不可发错人。
+        """
+        return self.identity_ok_name(
+            getattr(job, "hr_name", "") or "",
+            getattr(job, "title", "") or "",
+            getattr(job, "company", "") or "")
+
+    def identity_ok_name(self, hr: str, title: str = "", company: str = "") -> bool:
+        """按「HR + 职位/公司」校验当前已打开会话的身份（reply/resume 也用它）。"""
+        hr = self._norm(hr)
+        header = self._norm(self._conv_header_text())
+        if not hr or not header:
+            logger.warning(f"身份校验失败：HR='{hr}' header_len={len(header)}")
+            return False
+        if hr not in header:
+            logger.warning(f"身份校验失败：会话头不含 HR「{hr}」→ {header[:40]}")
+            return False
+        title = self._norm(title or "")
+        company = self._norm(company or "")
+        # 标题在会话头里可能被截断：用前缀 6/4 字匹配；公司名作为并列信号
+        checks = []
+        if title:
+            checks += [title[:6], title[:4]]
+        if company:
+            checks.append(company)
+        checks = [c for c in checks if c]
+        if not checks:
+            logger.warning("身份校验失败：无职位名/公司名可校验")
+            return False
+        if any(c in header for c in checks):
+            return True
+        logger.warning(f"身份校验失败：会话头与职位/公司不符（{title[:12]}/{company[:12]}）")
+        return False
+
     def _find_conv_by_hr(self, hr: str):
         """在会话列表按 HR 姓名精确定位可点击元素（找不到返回 None，绝不猜人）。"""
         try:
@@ -350,33 +474,34 @@ class Communicator:
                 continue
         return None
 
-    def ensure_conversation_open(self, job=None, timeout: int = 12) -> bool:
-        """确保聊天页已打开与 job.hr_name 对应的会话（R23-1）。
+    def ensure_conversation_open(self, job=None, timeout: int = 15) -> bool:
+        """确保聊天页打开的是 **job 对应的会话**（R23-1 + R30 P0）。
 
-        新 UI 点「立即沟通」只跳 /web/geek/chat、不自动打开会话；
-        这里按 HR 姓名精确定位。**定位不到就放弃**——发错人的代价远高于失败。
+        R30 教训：**输入框存在 ≠ 会话正确**——输入框可能属于上一个会话。
+        因此判据只有一个：`identity_ok(job)`（会话头含目标 HR + 职位/公司）。
         """
         deadline = time.time() + timeout
-        first = True
+        hr = (getattr(job, "hr_name", "") or "").strip()
+        if not hr:
+            logger.warning("缺少 HR 姓名，无法安全定位会话（不猜人）")
+            return False
         while time.time() < deadline:
-            if self._first_ele(SELECTORS["chat_inputs"], timeout=2 if first else 1):
+            if self.identity_ok(job):
                 return True
-            first = False
-            hr = (getattr(job, "hr_name", "") or "").strip()
-            if not hr:
-                logger.warning("缺少 HR 姓名，无法安全定位会话（不猜人）")
-                return False
             if "/web/geek/chat" not in (self.tab.url or ""):
                 self.tab.get(CHAT_URL)
                 sleep_range(2, 3, "等待聊天页加载")
             item = self._find_conv_by_hr(hr)
             if item:
                 logger.info(f"按 HR 名定位会话: {hr}")
-                self._jitter_click(item, (-60, 60), (-5, 5))
+                try:
+                    item.click(by_js=True)          # R30：DOM 点击优先，避免坐标命中邻居
+                except Exception:
+                    self._jitter_click(item, (-60, 60), (-5, 5))
                 sleep_range(2, 3.5, "等待会话打开")
             else:
                 time.sleep(1.5)   # 新会话可能还在渲染，稍等再试
-        return bool(self._first_ele(SELECTORS["chat_inputs"], timeout=2))
+        return self.identity_ok(job)
 
     def _verify_sent(self, text: str, timeout: int = 6) -> bool:
         """读当前会话最后几条我方消息，确认与发送内容匹配。"""

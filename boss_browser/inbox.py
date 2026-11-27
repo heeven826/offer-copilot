@@ -203,14 +203,28 @@ class InboxProcessor:
         if "/web/geek/chat" not in (self.tab.url or ""):
             self.tab.get(CHAT_URL)
             sleep_range(2.5, 3.5, "等待聊天页加载")
+        from .actions import Communicator
+        comm = Communicator(self.tab, self.cfg, self.db)
         friend = {"name": name, "brandName": brand}
-        item = self._find_conversation(friend)
-        if not item:
-            self._audit("open_conversation", target=name, outcome="fail", brand=brand)
-            return False
-        self._jitter_click(item, (-80, 80), (-6, 6))
-        sleep_range(2, 3, "等待会话打开")
-        return True
+        for attempt in range(2):
+            item = self._find_conversation(friend)
+            if not item:
+                break
+            if attempt == 0:
+                try:
+                    item.click(by_js=True)       # R30：DOM 点击优先
+                except Exception:
+                    self._jitter_click(item, (-80, 80), (-6, 6))
+            else:
+                self._jitter_click(item, (-80, 80), (-6, 6))
+            sleep_range(2, 3, "等待会话打开")
+            # R30：打开后校验身份——防止把回复发进别人的会话
+            if comm.identity_ok_name(name, "", brand):
+                return True
+            logger.warning(f"会话身份校验未通过（{name}），重试 DOM/坐标点击")
+        self._audit("open_conversation", target=name, outcome="fail", brand=brand,
+                    reason="not_found_or_identity_mismatch")
+        return False
 
     def run(self, max_conv: int = 5, send_enabled: bool = True) -> dict:
         """处理未读会话：读取 → AI 决策 → 回复或发简历。"""

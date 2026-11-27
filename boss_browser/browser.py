@@ -47,6 +47,8 @@ class BossBrowser:
         opts.set_user_data_path(str(self.user_data_dir))
         # 降低自动化特征
         opts.set_argument("--disable-blink-features=AutomationControlled")
+        # R28-1：最小化窗口会让聊天编辑器塌成 0 高度、发送静默失败 —— 拉起时最大化
+        opts.set_argument("--start-maximized")
         # 注意：不使用 headless —— 无头模式极易被识别
 
         self.browser = Chromium(opts)   # 已有实例则自动接管

@@ -86,6 +86,43 @@ def out(data=None, error=None, code=None):
     sys.exit(code)
 
 
+_SEND_LOCK = ROOT / "data" / ".send.lock"
+
+
+def acquire_send_lock():
+    """发送类命令的进程级互斥锁（R29-2）。
+
+    多会话/定时任务 + 人工触发同时跑 greet 会抢同一个 Chrome：
+    出现计数跳变、already_done/send_unverified 混杂，甚至发错会话。
+    锁超时 10 分钟自动失效（进程崩溃后不会永久卡死）。
+    """
+    import atexit
+    import json as _json
+    import os as _os
+    _SEND_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    if _SEND_LOCK.exists():
+        try:
+            info = _json.loads(_SEND_LOCK.read_text(encoding="utf-8"))
+            age = now - float(info.get("ts", 0))
+            pid = info.get("pid", "?")
+        except Exception:
+            age, pid = 10 ** 6, "?"
+        if age < 600:
+            out(error=f"locked: 另一个进程正在操作浏览器（pid={pid}，{int(age)}s 前持有）。"
+                      "请等它结束；若确认其已异常退出，删除 data/.send.lock 后重试")
+    _SEND_LOCK.write_text(
+        _json.dumps({"pid": _os.getpid(), "ts": now}), encoding="utf-8")
+    atexit.register(_release_send_lock)
+
+
+def _release_send_lock():
+    try:
+        _SEND_LOCK.unlink()
+    except Exception:
+        pass
+
+
 def chrome_help_error(e, cfg) -> str:
     """Chrome 连不上的人话报错（端口取配置，不硬编码）。"""
     port = (cfg.get("browser") or {}).get("debug_port", 9222)
@@ -482,6 +519,7 @@ def cmd_greet(args):
     db = open_db(args)
     rate = cfg.get("rate", {})
     msg = read_msg(args)
+    acquire_send_lock()          # R29-2：同一时刻只允许一个发送进程
 
     # ---- 护栏（全部在工具层强制，拒绝违规调用）----
     if not msg:
@@ -565,6 +603,7 @@ def cmd_reply(args):
     db = open_db(args)
     rate = cfg.get("rate", {})
     msg = read_msg(args)
+    acquire_send_lock()          # R29-2
     if not msg or len(msg) > 300:
         out(error="msg_required_or_too_long(>300)")
     wait_pace(db, "last_greet_ts", rate.get("between_greets", [60, 70]), "消息")
@@ -593,6 +632,7 @@ def cmd_reply(args):
 def cmd_resume(args):
     cfg = load_cfg()
     db = open_db(args)
+    acquire_send_lock()          # R29-2
     tab = connect(cfg, db)
     inbox = InboxProcessor(tab, cfg, db, {})
     if not inbox.find_and_open(args.name, args.brand or ""):
